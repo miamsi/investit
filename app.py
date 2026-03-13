@@ -13,13 +13,13 @@ st.title("📊 Indonesian Investment Portfolio Advisor")
 @st.cache_data
 def load_stock_data():
     df = pd.read_csv("master_schedule_rows.csv")
-    df["ticker"] = df["ticker"].str.replace(".JK","",regex=False)
+    df["ticker"] = df["ticker"].astype(str).str.replace(".JK","",regex=False).str.upper().str.strip()
     return df
 
 @st.cache_data
 def load_bonds():
     df = pd.read_excel("LIST HARGA OBLIGASI PER 12 MARET 2026.xlsx")
-    df["BOND'S CODE"] = df["BOND'S CODE"].astype(str).str.strip()
+    df["BOND'S CODE"] = df["BOND'S CODE"].astype(str).str.upper().str.strip()
     return df
 
 stocks = load_stock_data()
@@ -116,7 +116,7 @@ st.subheader("Bond Candidates")
 st.dataframe(bond_candidates)
 
 # -----------------------------
-# AI PORTFOLIO GENERATION
+# GENERATE PORTFOLIOS
 # -----------------------------
 
 if st.button("Generate Portfolio Options"):
@@ -144,10 +144,10 @@ Available Stocks:
 Available Bonds:
 {bonds_ai}
 
-Create 3 different portfolios.
+Create 3 portfolios.
 
 Rules:
-- Use ONLY assets provided
+- Use ONLY the assets listed
 - Do NOT modify ticker names
 - Allocation must sum to 100
 
@@ -202,7 +202,7 @@ Format:
 
         for a in p["allocation"]:
 
-            asset = str(a["asset"]).replace(".JK","").strip()
+            asset = str(a["asset"]).upper().replace(".JK","").strip()
             percent = float(a["percent"])
 
             amount = capital * percent/100
@@ -277,7 +277,7 @@ Format:
         df = pd.concat([df,total_row],ignore_index=True)
 
 # -----------------------------
-# FORMAT TABLE
+# FORMAT
 # -----------------------------
 
         df["Amount"] = df["Amount"].apply(
