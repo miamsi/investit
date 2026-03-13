@@ -152,6 +152,9 @@ if st.button("Generate Portfolio Options"):
     prompt = f"""
 You are an Indonesian investment advisor.
 
+IMPORTANT:
+Use asset names EXACTLY as provided in the dataset. Do not modify tickers. Use bahasa Indonesia.
+
 Capital: {capital}
 Stock allocation: {stock_percent}%
 Bond allocation: {bond_percent}%
@@ -222,9 +225,8 @@ Return JSON only like this:
                     return bond_returns[k]
             return 0
 
-        df["Return %"] = df["Asset"].apply(get_return)
-
-        df["Return (Rp)"] = df["Amount"] * df["Return %"]
+        df["Return %"] = df["Asset"].apply(get_return).fillna(0)
+        df["Return (Rp)"] = df["Amount"].astype(float) * df["Return %"]
 
 # -----------------------------
 # TOTAL ROW
