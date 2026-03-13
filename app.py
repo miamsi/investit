@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-st.title("📊 Investment Card Monitor")
+st.title("Investment Card Monitor")
 
 portfolio = {
     "Ticker": ["BBRI.JK", "PTBA.JK", "TLKM.JK"],
@@ -14,37 +14,52 @@ portfolio = {
 df = pd.DataFrame(portfolio)
 
 prices = []
+ma200_list = []
+distance_list = []
+ma_signal_list = []
 
 for ticker in df["Ticker"]:
+
     stock = yf.Ticker(ticker)
-    price = stock.history(period="1d")["Close"].iloc[-1]
+    hist = stock.history(period="1y")
+
+    price = hist["Close"].iloc[-1]
+    ma200 = hist["Close"].rolling(200).mean().iloc[-1]
+
+    distance = (price - ma200) / ma200 * 100
+
+    if distance > 8:
+        ma_signal = "WAIT"
+    elif distance > 2:
+        ma_signal = "WATCH"
+    elif distance > -3:
+        ma_signal = "BUY"
+    else:
+        ma_signal = "STRONG BUY"
+
     prices.append(price)
+    ma200_list.append(ma200)
+    distance_list.append(distance)
+    ma_signal_list.append(ma_signal)
 
 df["Current Price"] = prices
+df["MA200"] = ma200_list
+df["MA200 Distance %"] = distance_list
+df["MA Signal"] = ma_signal_list
+
 
 def decision(row):
+
     if row["Current Price"] <= row["Buy Max"] and row["Current Price"] >= row["Buy Min"]:
-        return "🟢 BUY ZONE"
+        return "BUY ZONE"
+
     elif row["Current Price"] < row["Buy Min"]:
-        return "🔥 STRONG BUY"
+        return "STRONG BUY"
+
     else:
-        return "⏳ WAIT"
+        return "WAIT"
+
 
 df["Decision"] = df.apply(decision, axis=1)
 
-st.subheader("Investment Entry Table")
-
 st.dataframe(df)
-
-st.subheader("Quick Signals")
-
-for i,row in df.iterrows():
-
-    if row["Decision"] == "🟢 BUY ZONE":
-        st.success(f"{row['Stock']} is in BUY ZONE")
-
-    elif row["Decision"] == "🔥 STRONG BUY":
-        st.error(f"{row['Stock']} is STRONG BUY")
-
-    else:
-        st.warning(f"{row['Stock']} still above buy range")
