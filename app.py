@@ -100,10 +100,26 @@ def get_returns(tickers):
     data = yf.download(
         tickers,
         period="1y",
+        auto_adjust=True,
         progress=False
-    )["Adj Close"]
+    )
 
-    returns = data.pct_change().dropna()
+    # yfinance may return multi-index columns
+    if isinstance(data.columns, pd.MultiIndex):
+
+        if "Adj Close" in data.columns.levels[0]:
+            prices = data["Adj Close"]
+
+        elif "Close" in data.columns.levels[0]:
+            prices = data["Close"]
+
+        else:
+            prices = data.iloc[:, :len(tickers)]
+
+    else:
+        prices = data
+
+    returns = prices.pct_change().dropna()
 
     return returns
 
