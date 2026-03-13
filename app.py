@@ -208,13 +208,18 @@ Return JSON only like this:
         df["Amount"] = df["Allocation %"]/100 * capital
 
         def get_return(asset):
-
+            asset = str(asset).strip()
             if asset in stock_returns:
                 return stock_returns[asset]
-
             if asset in bond_returns:
                 return bond_returns[asset]
-
+            asset_clean = asset.replace(".JK","")
+            for k in stock_returns:
+                if asset_clean in k:
+                    return stock_returns[k]
+            for k in bond_returns:
+                if asset_clean in k:
+                    return bond_returns[k]
             return 0
 
         df["Return %"] = df["Asset"].apply(get_return)
