@@ -84,7 +84,6 @@ if growth_preference == "Capital Growth":
     ) / stock_candidates["live_price_2026"]
 
 else:
-
     stock_candidates["score"] = stock_candidates["dividend_yield"]
 
 stock_candidates = stock_candidates.sort_values(
@@ -130,13 +129,41 @@ for _, r in stock_candidates.iterrows():
 
     total_return = growth + r["dividend_yield"]/100
 
-    stock_returns[r["ticker"]] = total_return
+    stock_returns[str(r["ticker"]).strip()] = total_return
 
 bond_returns = {}
 
 for _, r in bond_candidates.iterrows():
 
-    bond_returns[r["BOND'S CODE"]] = r["YEARLY COUPON RATE"]/100
+    bond_returns[str(r["BOND'S CODE"]).strip()] = r["YEARLY COUPON RATE"]/100
+
+
+# -----------------------------
+# RETURN LOOKUP FUNCTION
+# -----------------------------
+
+def get_return(asset):
+
+    asset = str(asset).strip()
+
+    if asset in stock_returns:
+        return stock_returns[asset]
+
+    if asset in bond_returns:
+        return bond_returns[asset]
+
+    asset_clean = asset.replace(".JK","")
+
+    for k in stock_returns:
+        if asset_clean in k:
+            return stock_returns[k]
+
+    for k in bond_returns:
+        if asset_clean in k:
+            return bond_returns[k]
+
+    return 0
+
 
 # -----------------------------
 # AI PORTFOLIO GENERATION
@@ -153,7 +180,9 @@ if st.button("Generate Portfolio Options"):
 You are an Indonesian investment advisor.
 
 IMPORTANT:
-Use asset names EXACTLY as provided in the dataset. Do not modify tickers. Use bahasa Indonesia.
+Use asset names EXACTLY as provided.
+Use fields: asset, percent.
+Make the narratives in bahasa indonesia.
 
 Capital: {capital}
 Stock allocation: {stock_percent}%
@@ -167,14 +196,15 @@ Available bonds:
 
 Create 3 different portfolios.
 
-Return JSON only like this:
+Return ONLY JSON.
+
+Example format:
 
 [
 {{
 "name":"Portfolio A",
 "allocation":[
 {{"asset":"BBCA.JK","percent":30}},
-{{"asset":"BBRI.JK","percent":30}},
 {{"asset":"FR0080","percent":40}}
 ],
 "strength":"...",
@@ -189,59 +219,55 @@ Return JSON only like this:
         temperature=0.3
     )
 
-    result = json.loads(
-        completion.choices[0].message.content
-    )
+    raw = completion.choices[0].message.content
+
+    try:
+        result = json.loads(raw)
+    except:
+        st.error("AI returned invalid JSON")
+        st.write(raw)
+        st.stop()
 
 # -----------------------------
-# BUILD TABLES
+# BUILD PORTFOLIO TABLES
 # -----------------------------
 
     for p in result:
 
-        st.subheader(p["name"])
+        st.subheader(p.get("name","Portfolio"))
 
-        df = pd.DataFrame(p["allocation"])
+        df = pd.DataFrame(p.get("allocation",[]))
+
+        df.columns = df.columns.str.lower()
 
         df = df.rename(columns={
             "asset":"Asset",
             "percent":"Allocation %"
         })
 
+        if "Asset" not in df.columns:
+            st.error("AI output format error")
+            st.write(df)
+            continue
+
+        df = df[df["Allocation %"] > 0]
+
         df["Amount"] = df["Allocation %"]/100 * capital
 
-        def get_return(asset):
-            asset = str(asset).strip()
-            if asset in stock_returns:
-                return stock_returns[asset]
-            if asset in bond_returns:
-                return bond_returns[asset]
-            asset_clean = asset.replace(".JK","")
-            for k in stock_returns:
-                if asset_clean in k:
-                    return stock_returns[k]
-            for k in bond_returns:
-                if asset_clean in k:
-                    return bond_returns[k]
-            return 0
+        df["Return %"] = df["Asset"].apply(get_return)
 
-        df["Return %"] = df["Asset"].apply(get_return).fillna(0)
-        df["Return (Rp)"] = df["Amount"].astype(float) * df["Return %"]
+        df["Return (Rp)"] = df["Amount"] * df["Return %"]
 
 # -----------------------------
 # TOTAL ROW
 # -----------------------------
 
-        total_allocation = df["Allocation %"].sum()
-        total_amount = df["Amount"].sum()
-        total_return_rp = df["Return (Rp)"].sum()
-
         total_row = pd.DataFrame([{
             "Asset":"TOTAL",
-            "Allocation %":total_allocation,
-            "Amount":total_amount,
+            "Allocation %":df["Allocation %"].sum(),
+            "Amount":df["Amount"].sum(),
             "Return %":"",
-            "Return (Rp)":total_return_rp
+            "Return (Rp)":df["Return (Rp)"].sum()
         }])
 
         df = pd.concat([df,total_row],ignore_index=True)
@@ -276,5 +302,5 @@ Return JSON only like this:
 
         st.dataframe(df, use_container_width=True)
 
-        st.write("Strength:", p["strength"])
-        st.write("Weakness:", p["weakness"])
+        st.write("Strength:", p.get("strength","-"))
+        st.write("Weakness:", p.get("weakness","-"))
