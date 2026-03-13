@@ -124,7 +124,7 @@ if st.button("Generate Portfolio Options"):
     ].to_json(orient="records")
 
     bonds_ai = bond_candidates[
-        ["BOND'S CODE","PRICE","YEARLY COUPON RATE"]
+        ["BOND'S CODE","LATEST PRICE PER UNIT","YEARLY COUPON RATE"]
     ].to_json(orient="records")
 
     prompt = f"""
