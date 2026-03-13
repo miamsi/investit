@@ -273,19 +273,17 @@ if GROQ_AVAILABLE:
 
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
+        stock_table = top_stocks[['ticker','dividend_yield','roe','pe_ratio']].to_string()
+        bond_table = best_bonds[["BOND'S CODE","YEARLY COUPON RATE"]].to_string()
         prompt = f"""
         Analyze this Indonesian investment portfolio.
-
         Capital: {capital}
         Stock Allocation: {stock_weight}%
         Bond Allocation: {bond_weight}%
-
         Top Stocks:
-        {top_stocks[['ticker','dividend_yield','roe','pe_ratio']].to_string()}
-
+        {stock_table}
         Bonds:
-        {best_bonds[['BOND\'S CODE','YEARLY COUPON RATE']].to_string()}
-
+        {bond_table}
         Provide:
         - strengths
         - risks
