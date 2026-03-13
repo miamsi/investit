@@ -12,18 +12,18 @@ st.title("📊 Indonesian Investment Portfolio Advisor")
 
 @st.cache_data
 def load_stock_data():
-    return pd.read_csv("master_schedule_rows.csv")
+    df = pd.read_csv("master_schedule_rows.csv")
+    df["ticker"] = df["ticker"].str.replace(".JK","",regex=False)
+    return df
 
 @st.cache_data
 def load_bonds():
-    return pd.read_excel("LIST HARGA OBLIGASI PER 12 MARET 2026.xlsx")
+    df = pd.read_excel("LIST HARGA OBLIGASI PER 12 MARET 2026.xlsx")
+    df["BOND'S CODE"] = df["BOND'S CODE"].astype(str).str.strip()
+    return df
 
 stocks = load_stock_data()
 bonds = load_bonds()
-
-# Remove rows with missing prices
-stocks = stocks.dropna(subset=["live_price_2026"])
-bonds = bonds.dropna(subset=["LATEST PRICE PER UNIT"])
 
 # -----------------------------
 # USER INPUT
@@ -31,21 +31,42 @@ bonds = bonds.dropna(subset=["LATEST PRICE PER UNIT"])
 
 st.sidebar.header("Investment Preferences")
 
-capital = st.sidebar.number_input("Investment Capital (IDR)",value=30000000)
+capital = st.sidebar.number_input(
+    "Investment Capital (IDR)",
+    value=30000000
+)
 
-stock_percent = st.sidebar.slider("Stock Allocation %",0,100,60)
+stock_percent = st.sidebar.slider(
+    "Stock Allocation %",
+    0,100,60
+)
+
 bond_percent = 100 - stock_percent
 
-min_dividend = st.sidebar.number_input("Minimal Stock Dividend Yield %",value=3.0)
-min_coupon = st.sidebar.number_input("Minimal Bond Coupon %",value=6.0)
+min_dividend = st.sidebar.number_input(
+    "Minimal Stock Dividend Yield %",
+    value=3.0
+)
+
+min_coupon = st.sidebar.number_input(
+    "Minimal Bond Coupon %",
+    value=6.0
+)
 
 growth_preference = st.sidebar.selectbox(
     "Stock Preference",
     ["Capital Growth","High Dividend"]
 )
 
-max_stocks = st.sidebar.slider("Maximum Number of Stocks",1,20,5)
-max_bonds = st.sidebar.slider("Maximum Number of Bonds",1,20,3)
+max_stocks = st.sidebar.slider(
+    "Maximum Number of Stocks",
+    1,20,5
+)
+
+max_bonds = st.sidebar.slider(
+    "Maximum Number of Bonds",
+    1,20,3
+)
 
 # -----------------------------
 # FILTER STOCKS
@@ -67,7 +88,8 @@ else:
     stock_candidates["score"] = stock_candidates["dividend_yield"]
 
 stock_candidates = stock_candidates.sort_values(
-    "score",ascending=False
+    "score",
+    ascending=False
 ).head(max_stocks)
 
 # -----------------------------
@@ -84,7 +106,7 @@ bond_candidates = bond_candidates.sort_values(
 ).head(max_bonds)
 
 # -----------------------------
-# SHOW DATA
+# SHOW FILTERED DATA
 # -----------------------------
 
 st.subheader("Stock Candidates")
@@ -94,7 +116,7 @@ st.subheader("Bond Candidates")
 st.dataframe(bond_candidates)
 
 # -----------------------------
-# GENERATE PORTFOLIO
+# AI PORTFOLIO GENERATION
 # -----------------------------
 
 if st.button("Generate Portfolio Options"):
@@ -122,14 +144,16 @@ Available Stocks:
 Available Bonds:
 {bonds_ai}
 
-Create 3 portfolios.
+Create 3 different portfolios.
 
 Rules:
-- Use only provided assets
+- Use ONLY assets provided
+- Do NOT modify ticker names
 - Allocation must sum to 100
-- Do not invent assets
 
 Return JSON ONLY.
+
+Format:
 
 [
 {{
@@ -158,7 +182,7 @@ Return JSON ONLY.
         st.stop()
 
 # -----------------------------
-# LOOKUPS
+# LOOKUP TABLES
 # -----------------------------
 
     stock_lookup = stock_candidates.set_index("ticker")
@@ -179,59 +203,61 @@ Return JSON ONLY.
         for a in p["allocation"]:
 
             asset = str(a["asset"]).replace(".JK","").strip()
-            percent = a["percent"]
+            percent = float(a["percent"])
 
             amount = capital * percent/100
 
-# -----------------------------
-# STOCK
-# -----------------------------
+            # -----------------------------
+            # STOCK
+            # -----------------------------
 
             if asset in stock_lookup.index:
 
                 price = stock_lookup.loc[asset]["live_price_2026"]
-                dy = stock_lookup.loc[asset]["dividend_yield"]/100
+                dy = stock_lookup.loc[asset]["dividend_yield"] / 100
 
-                if pd.isna(price) or price <= 0:
-                    shares = 0
-                    income = 0
-                else:
-                    shares = amount/price
-                    income = amount*dy
+                if pd.isna(price) or price == 0:
+                    continue
+
+                shares = amount / price
+                income = shares * price * dy
 
                 rows.append({
                     "Asset":asset,
                     "Allocation":f"{percent}%",
                     "Amount":amount,
-                    "Units":int(shares),
+                    "Units":round(shares),
                     "Income":income
                 })
 
-# -----------------------------
-# BOND
-# -----------------------------
+            # -----------------------------
+            # BOND
+            # -----------------------------
 
             elif asset in bond_lookup.index:
 
                 price = bond_lookup.loc[asset]["LATEST PRICE PER UNIT"]
                 coupon = bond_lookup.loc[asset]["YEARLY COUPON RATE"]/100
 
-                if pd.isna(price) or price <= 0:
-                    units = 0
-                    income = 0
-                else:
-                    units = amount/price
-                    income = units*1000000*coupon
+                if pd.isna(price) or price == 0:
+                    continue
+
+                units = amount / price
+                income = units * 1000000 * coupon
 
                 rows.append({
                     "Asset":asset,
                     "Allocation":f"{percent}%",
                     "Amount":amount,
-                    "Units":int(units),
+                    "Units":round(units),
                     "Income":income
                 })
 
         df = pd.DataFrame(rows)
+
+        if df.empty:
+            st.warning("Portfolio could not be calculated due to asset mismatch.")
+            continue
 
 # -----------------------------
 # TOTALS
@@ -251,11 +277,16 @@ Return JSON ONLY.
         df = pd.concat([df,total_row],ignore_index=True)
 
 # -----------------------------
-# FORMAT
+# FORMAT TABLE
 # -----------------------------
 
-        df["Amount"] = df["Amount"].apply(lambda x: f"Rp {x:,.0f}" if x!="" else "")
-        df["Income"] = df["Income"].apply(lambda x: f"Rp {x:,.0f}" if x!="" else "")
+        df["Amount"] = df["Amount"].apply(
+            lambda x: f"Rp {x:,.0f}" if isinstance(x,(int,float)) else ""
+        )
+
+        df["Income"] = df["Income"].apply(
+            lambda x: f"Rp {x:,.0f}" if isinstance(x,(int,float)) else ""
+        )
 
         df = df.rename(columns={
             "Units":"Shares / Units",
@@ -265,7 +296,7 @@ Return JSON ONLY.
         st.dataframe(df,use_container_width=True)
 
 # -----------------------------
-# SUMMARY
+# SUMMARY FOR AI
 # -----------------------------
 
         monthly_income = total_income/12
@@ -276,24 +307,23 @@ Capital: {capital}
 Annual Income: {round(total_income)}
 Monthly Income: {round(monthly_income)}
 Assets: {', '.join([x['asset'] for x in p['allocation']])}
-
 """
 
 # -----------------------------
-# AI EXPLANATION
+# AI NARRATIVE
 # -----------------------------
 
     explanation_prompt = f"""
 You are a financial advisor.
 
-Below are 3 portfolios.
+Below are 3 portfolios with their annual income results.
 
 {summary_text}
 
-Explain the differences between them.
+Explain the differences between the portfolios.
 
 Rules:
-- Text only
+- TEXT ONLY
 - No tables
 - No new numbers
 """
