@@ -287,31 +287,43 @@ if GROQ_AVAILABLE:
 
     if st.button("Generate AI Analysis"):
 
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        try:
 
-        stock_table = top_stocks[['ticker','dividend_yield','roe','pe_ratio']].to_string()
-        bond_table = best_bonds[["BOND'S CODE","YEARLY COUPON RATE"]].to_string()
-        prompt = f"""
-        Analyze this Indonesian investment portfolio.
-        Capital: {capital}
-        Stock Allocation: {stock_weight}%
-        Bond Allocation: {bond_weight}%
-        Top Stocks:
-        {stock_table}
-        Bonds:
-        {bond_table}
-        Provide:
-        - strengths
-        - risks
-        - improvement suggestions
-        """
+            client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-        completion = client.chat.completions.create(
-            model="llama3-70b-8192",
-            messages=[{"role": "user", "content": prompt}]
-        )
+            stock_table = top_stocks[['ticker','dividend_yield','roe','pe_ratio']].head(5).to_string()
+            bond_table = best_bonds[["BOND'S CODE","YEARLY COUPON RATE"]].head(5).to_string()
 
-        st.write(completion.choices[0].message.content)
+            prompt = f"""
+Analyze this Indonesian investment portfolio.
+
+Capital: {capital}
+Stock Allocation: {stock_weight}%
+Bond Allocation: {bond_weight}%
+
+Top Stocks:
+{stock_table}
+
+Bonds:
+{bond_table}
+
+Provide:
+- strengths
+- risks
+- improvement suggestions
+"""
+
+            completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=500
+            )
+
+            st.write(completion.choices[0].message.content)
+
+        except Exception as e:
+            st.error(e)
 
 else:
     st.info("Groq library not installed. Install 'groq' to enable AI advisor.")
