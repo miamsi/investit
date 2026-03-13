@@ -4,7 +4,6 @@ from groq import Groq
 import json
 
 st.set_page_config(layout="wide")
-
 st.title("📊 Indonesian Investment Portfolio Advisor")
 
 # -----------------------------
@@ -28,53 +27,27 @@ bonds = load_bonds()
 
 st.sidebar.header("Investment Preferences")
 
-capital = st.sidebar.number_input(
-    "Investment Capital (IDR)",
-    value=30000000
-)
+capital = st.sidebar.number_input("Investment Capital (IDR)", value=30000000)
 
-stock_percent = st.sidebar.slider(
-    "Stock Allocation %",
-    0,100,60
-)
-
+stock_percent = st.sidebar.slider("Stock Allocation %",0,100,60)
 bond_percent = 100 - stock_percent
 
-min_dividend = st.sidebar.number_input(
-    "Minimal Stock Dividend Yield %",
-    value=3.0
-)
-
-min_coupon = st.sidebar.number_input(
-    "Minimal Bond Coupon %",
-    value=6.0
-)
+min_dividend = st.sidebar.number_input("Minimal Stock Dividend Yield %",value=3.0)
+min_coupon = st.sidebar.number_input("Minimal Bond Coupon %",value=6.0)
 
 growth_preference = st.sidebar.selectbox(
     "Stock Preference",
-    [
-        "Capital Growth",
-        "High Dividend"
-    ]
+    ["Capital Growth","High Dividend"]
 )
 
-max_stocks = st.sidebar.slider(
-    "Maximum Number of Stocks",
-    1,20,5
-)
-
-max_bonds = st.sidebar.slider(
-    "Maximum Number of Bonds",
-    1,20,3
-)
+max_stocks = st.sidebar.slider("Maximum Number of Stocks",1,20,5)
+max_bonds = st.sidebar.slider("Maximum Number of Bonds",1,20,3)
 
 # -----------------------------
-# PREPROCESS STOCKS
+# FILTER STOCKS
 # -----------------------------
 
-stock_candidates = stocks[
-    stocks["dividend_yield"] >= min_dividend
-].copy()
+stock_candidates = stocks[stocks["dividend_yield"] >= min_dividend].copy()
 
 if growth_preference == "Capital Growth":
 
@@ -87,12 +60,11 @@ else:
     stock_candidates["score"] = stock_candidates["dividend_yield"]
 
 stock_candidates = stock_candidates.sort_values(
-    "score",
-    ascending=False
+    "score",ascending=False
 ).head(max_stocks)
 
 # -----------------------------
-# PREPROCESS BONDS
+# FILTER BONDS
 # -----------------------------
 
 bond_candidates = bonds[
@@ -105,7 +77,7 @@ bond_candidates = bond_candidates.sort_values(
 ).head(max_bonds)
 
 # -----------------------------
-# SHOW CANDIDATES
+# SHOW FILTERED DATA
 # -----------------------------
 
 st.subheader("Stock Candidates")
@@ -129,7 +101,7 @@ for _, r in stock_candidates.iterrows():
 
     total_return = growth + r["dividend_yield"]/100
 
-    stock_returns[str(r["ticker"]).strip()] = total_return
+    stock_returns[str(r["ticker"]).replace(".JK","")] = total_return
 
 bond_returns = {}
 
@@ -138,13 +110,9 @@ for _, r in bond_candidates.iterrows():
     bond_returns[str(r["BOND'S CODE"]).strip()] = r["YEARLY COUPON RATE"]/100
 
 
-# -----------------------------
-# RETURN LOOKUP FUNCTION
-# -----------------------------
-
 def get_return(asset):
 
-    asset = str(asset).strip()
+    asset = str(asset).replace(".JK","").strip()
 
     if asset in stock_returns:
         return stock_returns[asset]
@@ -152,21 +120,11 @@ def get_return(asset):
     if asset in bond_returns:
         return bond_returns[asset]
 
-    asset_clean = asset.replace(".JK","")
-
-    for k in stock_returns:
-        if asset_clean in k:
-            return stock_returns[k]
-
-    for k in bond_returns:
-        if asset_clean in k:
-            return bond_returns[k]
-
     return 0
 
 
 # -----------------------------
-# AI PORTFOLIO GENERATION
+# GENERATE AI PORTFOLIOS
 # -----------------------------
 
 if st.button("Generate Portfolio Options"):
@@ -179,11 +137,6 @@ if st.button("Generate Portfolio Options"):
     prompt = f"""
 You are an Indonesian investment advisor.
 
-IMPORTANT:
-Use asset names EXACTLY as provided.
-Use fields: asset, percent.
-
-
 Capital: {capital}
 Stock allocation: {stock_percent}%
 Bond allocation: {bond_percent}%
@@ -194,17 +147,17 @@ Available stocks:
 Available bonds:
 {bond_json}
 
-Create 3 different portfolios.
+Create 3 portfolios.
 
-Return ONLY JSON.
+Return JSON only.
 
-Example format:
+Format:
 
 [
 {{
 "name":"Portfolio A",
 "allocation":[
-{{"asset":"BBCA.JK","percent":30}},
+{{"asset":"BBCA","percent":30}},
 {{"asset":"FR0080","percent":40}}
 ],
 "strength":"...",
@@ -215,46 +168,39 @@ Example format:
 
     completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role":"user","content":prompt}],
         temperature=0.3
     )
 
     raw = completion.choices[0].message.content
 
     try:
-        result = json.loads(raw)
+        portfolios = json.loads(raw)
     except:
         st.error("AI returned invalid JSON")
         st.write(raw)
         st.stop()
 
 # -----------------------------
-# BUILD PORTFOLIO TABLES
+# BUILD TABLES
 # -----------------------------
 
-    for p in result:
+    for p in portfolios:
 
         st.subheader(p.get("name","Portfolio"))
 
-        df = pd.DataFrame(p.get("allocation",[]))
-
-        df.columns = df.columns.str.lower()
+        df = pd.DataFrame(p["allocation"])
 
         df = df.rename(columns={
             "asset":"Asset",
             "percent":"Allocation %"
         })
 
-        if "Asset" not in df.columns:
-            st.error("AI output format error")
-            st.write(df)
-            continue
-
         df = df[df["Allocation %"] > 0]
 
         df["Amount"] = df["Allocation %"]/100 * capital
 
-        df["Return %"] = df["Asset"].apply(get_return)
+        df["Return %"] = df["Asset"].apply(get_return).fillna(0)
 
         df["Return (Rp)"] = df["Amount"] * df["Return %"]
 
@@ -262,22 +208,22 @@ Example format:
 # TOTAL ROW
 # -----------------------------
 
-        total_row = pd.DataFrame([{
+        total = pd.DataFrame([{
             "Asset":"TOTAL",
             "Allocation %":df["Allocation %"].sum(),
             "Amount":df["Amount"].sum(),
-            "Return %":"",
+            "Return %":None,
             "Return (Rp)":df["Return (Rp)"].sum()
         }])
 
-        df = pd.concat([df,total_row],ignore_index=True)
+        df = pd.concat([df,total],ignore_index=True)
 
 # -----------------------------
-# FORMAT TABLE
+# FORMAT
 # -----------------------------
 
         df["Allocation"] = df["Allocation %"].apply(
-            lambda x: "" if x=="" else f"{x:.0f}%"
+            lambda x: "" if pd.isna(x) else f"{x:.0f}%"
         )
 
         df["Amount"] = df["Amount"].apply(
@@ -285,7 +231,7 @@ Example format:
         )
 
         df["Return %"] = df["Return %"].apply(
-            lambda x: "" if x=="" else f"{x*100:.2f}%"
+            lambda x: "" if pd.isna(x) else f"{x*100:.2f}%"
         )
 
         df["Return (Rp)"] = df["Return (Rp)"].apply(
@@ -300,7 +246,7 @@ Example format:
             "Return (Rp)"
         ]]
 
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df,use_container_width=True)
 
-        st.write("Strength:", p.get("strength","-"))
-        st.write("Weakness:", p.get("weakness","-"))
+        st.write("Strength:",p.get("strength","-"))
+        st.write("Weakness:",p.get("weakness","-"))
