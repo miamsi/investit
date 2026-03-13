@@ -182,7 +182,7 @@ You are an Indonesian investment advisor.
 IMPORTANT:
 Use asset names EXACTLY as provided.
 Use fields: asset, percent.
-Make the narratives in bahasa indonesia.
+
 
 Capital: {capital}
 Stock allocation: {stock_percent}%
