@@ -12,21 +12,23 @@ try:
 except:
     GROQ_AVAILABLE = False
 
-st.set_page_config(layout="wide")
 
+st.set_page_config(layout="wide")
 st.title("📊 IHSG Quant Investment Lab")
 
-# -----------------------------
+# -------------------------------------------------
 # LOAD DATA
-# -----------------------------
+# -------------------------------------------------
 
 @st.cache_data
 def load_stock_data():
     return pd.read_csv("master_schedule_rows.csv")
 
+
 @st.cache_data
 def load_bonds():
     return pd.read_excel("LIST HARGA OBLIGASI PER 12 MARET 2026.xlsx")
+
 
 @st.cache_data
 def load_ihsg():
@@ -34,19 +36,20 @@ def load_ihsg():
     df["ticker"] = df["Kode"].astype(str) + ".JK"
     return df
 
+
 stocks = load_stock_data()
 bonds = load_bonds()
 ihsg = load_ihsg()
 
-# -----------------------------
-# SIDEBAR SETTINGS
-# -----------------------------
+# -------------------------------------------------
+# USER INPUT
+# -------------------------------------------------
 
 st.sidebar.header("Portfolio Settings")
 
 capital = st.sidebar.number_input(
     "Total Capital (IDR)",
-    value=100000000
+    value=30000000
 )
 
 stock_weight = st.sidebar.slider(
@@ -61,9 +64,40 @@ bond_weight = 100 - stock_weight
 stock_capital = capital * stock_weight / 100
 bond_capital = capital * bond_weight / 100
 
-# -----------------------------
-# FACTOR SCORING MODEL
-# -----------------------------
+# -------------------------------------------------
+# INVESTMENT PREFERENCES
+# -------------------------------------------------
+
+st.sidebar.subheader("Investment Preferences")
+
+risk_level = st.sidebar.selectbox(
+    "Risk Tolerance",
+    ["Low", "Medium", "High"]
+)
+
+dividend_priority = st.sidebar.slider(
+    "Dividend Priority",
+    0, 10, 5
+)
+
+growth_priority = st.sidebar.slider(
+    "Growth Priority",
+    0, 10, 5
+)
+
+value_priority = st.sidebar.slider(
+    "Value Priority",
+    0, 10, 5
+)
+
+investment_horizon = st.sidebar.selectbox(
+    "Investment Horizon",
+    ["Short Term", "Medium Term", "Long Term"]
+)
+
+# -------------------------------------------------
+# FACTOR MODEL
+# -------------------------------------------------
 
 stocks["price_upside"] = (
     stocks["predicted_high"] - stocks["live_price_2026"]
@@ -87,12 +121,11 @@ top_stocks = stocks.sort_values(
 ).head(10)
 
 st.subheader("🏆 Top Quant Ranked Stocks")
-
 st.dataframe(top_stocks)
 
-# -----------------------------
-# FETCH MARKET RETURNS
-# -----------------------------
+# -------------------------------------------------
+# FETCH RETURNS
+# -------------------------------------------------
 
 @st.cache_data
 def get_returns(tickers):
@@ -104,32 +137,22 @@ def get_returns(tickers):
         progress=False
     )
 
-    # yfinance may return multi-index columns
     if isinstance(data.columns, pd.MultiIndex):
-
-        if "Adj Close" in data.columns.levels[0]:
-            prices = data["Adj Close"]
-
-        elif "Close" in data.columns.levels[0]:
-            prices = data["Close"]
-
-        else:
-            prices = data.iloc[:, :len(tickers)]
-
+        prices = data["Close"]
     else:
         prices = data
 
     returns = prices.pct_change().dropna()
-
     return returns
+
 
 returns = get_returns(top_stocks["ticker"].tolist())
 
-# -----------------------------
-# MONTE CARLO SIMULATION
-# -----------------------------
+# -------------------------------------------------
+# MONTE CARLO
+# -------------------------------------------------
 
-def monte_carlo(returns, simulations=5000):
+def monte_carlo(returns, simulations=3000):
 
     mean_returns = returns.mean()
     cov = returns.cov()
@@ -169,9 +192,9 @@ fig = px.scatter(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# -----------------------------
-# OPTIMAL PORTFOLIO
-# -----------------------------
+# -------------------------------------------------
+# PORTFOLIO OPTIMIZATION
+# -------------------------------------------------
 
 def optimize_portfolio(returns):
 
@@ -201,6 +224,7 @@ def optimize_portfolio(returns):
 
     return result.x
 
+
 optimal_weights = optimize_portfolio(returns)
 
 portfolio = pd.DataFrame({
@@ -209,12 +233,11 @@ portfolio = pd.DataFrame({
 })
 
 st.subheader("⚖️ Optimal Portfolio Allocation")
-
 st.dataframe(portfolio)
 
-# -----------------------------
+# -------------------------------------------------
 # DIVIDEND FORECAST
-# -----------------------------
+# -------------------------------------------------
 
 dividend_income = (
     top_stocks["dividend_yield"].mean() / 100
@@ -225,9 +248,9 @@ st.metric(
     f"Rp {dividend_income:,.0f}"
 )
 
-# -----------------------------
+# -------------------------------------------------
 # BOND ANALYSIS
-# -----------------------------
+# -------------------------------------------------
 
 bonds["END DATE"] = pd.to_datetime(bonds["END DATE"])
 
@@ -245,7 +268,6 @@ best_bonds = bonds.sort_values(
 bond_income = bond_capital * best_bonds["yield"].mean()
 
 st.subheader("🏦 Best Bonds")
-
 st.dataframe(best_bonds)
 
 st.metric(
@@ -253,33 +275,22 @@ st.metric(
     f"Rp {bond_income:,.0f}"
 )
 
-# -----------------------------
+# -------------------------------------------------
 # PORTFOLIO SUMMARY
-# -----------------------------
+# -------------------------------------------------
 
 total_income = dividend_income + bond_income
 total_return = total_income / capital
 
 col1, col2, col3 = st.columns(3)
 
-col1.metric(
-    "Expected Annual Income",
-    f"Rp {total_income:,.0f}"
-)
+col1.metric("Expected Annual Income", f"Rp {total_income:,.0f}")
+col2.metric("Portfolio Yield", f"{total_return*100:.2f}%")
+col3.metric("Capital", f"Rp {capital:,.0f}")
 
-col2.metric(
-    "Portfolio Yield",
-    f"{total_return*100:.2f}%"
-)
-
-col3.metric(
-    "Capital",
-    f"Rp {capital:,.0f}"
-)
-
-# -----------------------------
+# -------------------------------------------------
 # AI ADVISOR
-# -----------------------------
+# -------------------------------------------------
 
 st.subheader("🤖 AI Portfolio Advisor")
 
@@ -287,50 +298,60 @@ if GROQ_AVAILABLE:
 
     if st.button("Generate AI Analysis"):
 
-        try:
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-            client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        stock_json = top_stocks.head(10).to_json(orient="records")
+        bond_json = best_bonds.head(5).to_json(orient="records")
+        portfolio_json = portfolio.to_json(orient="records")
 
-            stock_table = top_stocks[['ticker','dividend_yield','roe','pe_ratio']].head(5).to_string()
-            bond_table = best_bonds[["BOND'S CODE","YEARLY COUPON RATE"]].head(5).to_string()
+        prompt = f"""
+Anda adalah manajer investasi profesional Indonesia.
 
-            prompt = f"""
-I am a beginner who wants to decide how and to which stocks/bonds my money. Analyze this Indonesian investment portfolio in bahasa indonesia. Choose which stocks/bonds should I buy and how much and the return from each.
+Profil investor:
+Modal: {capital}
+Alokasi saham: {stock_weight}%
+Alokasi obligasi: {bond_weight}%
 
-Capital: {capital}
-Stock Allocation: {stock_weight}%
-Bond Allocation: {bond_weight}%
+Risk tolerance: {risk_level}
+Prioritas dividen: {dividend_priority}/10
+Prioritas growth: {growth_priority}/10
+Prioritas value: {value_priority}/10
+Horizon investasi: {investment_horizon}
 
-Top Stocks:
-{stock_table}
+Data saham:
+{stock_json}
 
-Bonds:
-{bond_table}
+Data obligasi:
+{bond_json}
 
-Provide:
-- strengths
-- risks
-- improvement suggestions
+Hasil optimasi kuantitatif:
+{portfolio_json}
+
+Tugas:
+1. Pilih saham terbaik
+2. Pilih obligasi terbaik
+3. Tentukan berapa rupiah dialokasikan ke setiap aset
+4. Estimasi return tahunan
+5. Jelaskan dengan bahasa sederhana
+
+Gunakan Bahasa Indonesia.
 """
 
-            completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=500
-            )
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=600
+        )
 
-            st.write(completion.choices[0].message.content)
-
-        except Exception as e:
-            st.error(e)
+        st.write(completion.choices[0].message.content)
 
 else:
-    st.info("Groq library not installed. Install 'groq' to enable AI advisor.")
+    st.info("Install groq library to enable AI advisor.")
 
-# -----------------------------
+# -------------------------------------------------
 # STOCK PRICE VIEWER
-# -----------------------------
+# -------------------------------------------------
 
 st.subheader("📈 Stock Price Viewer")
 
@@ -345,21 +366,15 @@ price_data = yf.download(
     progress=False
 )
 
-if price_data.empty:
-    st.warning("No price data available.")
-else:
+if not price_data.empty:
 
-    # Handle multi-index columns from yfinance
     if isinstance(price_data.columns, pd.MultiIndex):
         price_data.columns = price_data.columns.get_level_values(0)
 
-    if "Close" not in price_data.columns:
-        st.error("Close price not found in dataset.")
-    else:
-        fig2 = px.line(
-            price_data,
-            y="Close",
-            title=f"{ticker} Price Chart"
-        )
+    fig2 = px.line(
+        price_data,
+        y="Close",
+        title=f"{ticker} Price Chart"
+    )
 
-        st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, use_container_width=True)
