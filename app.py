@@ -295,7 +295,7 @@ if GROQ_AVAILABLE:
             bond_table = best_bonds[["BOND'S CODE","YEARLY COUPON RATE"]].head(5).to_string()
 
             prompt = f"""
-Analyze this Indonesian investment portfolio.
+I am a beginner who wants to decide how and to which stocks/bonds my money. Analyze this Indonesian investment portfolio in bahasa indonesia. Choose which stocks/bonds should I buy and how much and the return from each.
 
 Capital: {capital}
 Stock Allocation: {stock_weight}%
