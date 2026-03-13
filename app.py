@@ -60,7 +60,8 @@ else:
     stock_candidates["score"] = stock_candidates["dividend_yield"]
 
 stock_candidates = stock_candidates.sort_values(
-    "score",ascending=False
+    "score",
+    ascending=False
 ).head(max_stocks)
 
 # -----------------------------
@@ -94,6 +95,8 @@ stock_returns = {}
 
 for _, r in stock_candidates.iterrows():
 
+    ticker = str(r["ticker"]).replace(".JK","").strip()
+
     growth = (
         r["predicted_high"] -
         r["live_price_2026"]
@@ -101,51 +104,35 @@ for _, r in stock_candidates.iterrows():
 
     total_return = growth + r["dividend_yield"]/100
 
-    stock_returns[str(r["ticker"]).replace(".JK","")] = total_return
+    stock_returns[ticker] = total_return
 
 bond_returns = {}
 
 for _, r in bond_candidates.iterrows():
 
-    bond_returns[str(r["BOND'S CODE"]).strip()] = r["YEARLY COUPON RATE"]/100
+    code = str(r["BOND'S CODE"]).strip()
 
-
-def get_return(asset):
-
-    asset = str(asset).replace(".JK","").strip()
-
-    if asset in stock_returns:
-        return stock_returns[asset]
-
-    if asset in bond_returns:
-        return bond_returns[asset]
-
-    return 0
-
+    bond_returns[code] = r["YEARLY COUPON RATE"]/100
 
 # -----------------------------
-# GENERATE AI PORTFOLIOS
+# GENERATE PORTFOLIOS
 # -----------------------------
 
 if st.button("Generate Portfolio Options"):
 
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-    stock_json = stock_candidates.to_json(orient="records")
-    bond_json = bond_candidates.to_json(orient="records")
+    stock_list = list(stock_candidates["ticker"].str.replace(".JK",""))
+    bond_list = list(bond_candidates["BOND'S CODE"])
 
     prompt = f"""
 You are an Indonesian investment advisor.
 
-Capital: {capital}
-Stock allocation: {stock_percent}%
-Bond allocation: {bond_percent}%
-
 Available stocks:
-{stock_json}
+{stock_list}
 
 Available bonds:
-{bond_json}
+{bond_list}
 
 Create 3 portfolios.
 
@@ -155,13 +142,9 @@ Format:
 
 [
 {{
-"name":"Portfolio A",
-"allocation":[
-{{"asset":"BBCA","percent":30}},
-{{"asset":"FR0080","percent":40}}
-],
-"strength":"...",
-"weakness":"..."
+"name":"Income Portfolio",
+"stocks":["BBCA","TLKM"],
+"bonds":["FR0080","FR0083"]
 }}
 ]
 """
@@ -182,27 +165,45 @@ Format:
         st.stop()
 
 # -----------------------------
-# BUILD TABLES
+# BUILD PORTFOLIO TABLES
 # -----------------------------
 
     for p in portfolios:
 
-        st.subheader(p.get("name","Portfolio"))
+        st.subheader(p["name"])
 
-        df = pd.DataFrame(p["allocation"])
+        stocks = p["stocks"]
+        bonds = p["bonds"]
 
-        df = df.rename(columns={
-            "asset":"Asset",
-            "percent":"Allocation %"
-        })
+        assets = stocks + bonds
 
-        df = df[df["Allocation %"] > 0]
+        allocation = 100 / len(assets)
 
-        df["Amount"] = df["Allocation %"]/100 * capital
+        rows = []
 
-        df["Return %"] = df["Asset"].apply(get_return).fillna(0)
+        for asset in assets:
 
-        df["Return (Rp)"] = df["Amount"] * df["Return %"]
+            if asset in stock_returns:
+                r = stock_returns[asset]
+
+            elif asset in bond_returns:
+                r = bond_returns[asset]
+
+            else:
+                r = 0
+
+            amount = capital * allocation / 100
+            ret_rp = amount * r
+
+            rows.append({
+                "Asset":asset,
+                "Allocation %":allocation,
+                "Amount":amount,
+                "Return %":r,
+                "Return (Rp)":ret_rp
+            })
+
+        df = pd.DataFrame(rows)
 
 # -----------------------------
 # TOTAL ROW
@@ -219,26 +220,28 @@ Format:
         df = pd.concat([df,total],ignore_index=True)
 
 # -----------------------------
-# FORMAT
+# FORMAT DISPLAY
 # -----------------------------
 
-        df["Allocation"] = df["Allocation %"].apply(
+        display = df.copy()
+
+        display["Allocation"] = display["Allocation %"].apply(
             lambda x: "" if pd.isna(x) else f"{x:.0f}%"
         )
 
-        df["Amount"] = df["Amount"].apply(
+        display["Amount"] = display["Amount"].apply(
             lambda x: f"Rp {x:,.0f}"
         )
 
-        df["Return %"] = df["Return %"].apply(
+        display["Return %"] = display["Return %"].apply(
             lambda x: "" if pd.isna(x) else f"{x*100:.2f}%"
         )
 
-        df["Return (Rp)"] = df["Return (Rp)"].apply(
+        display["Return (Rp)"] = display["Return (Rp)"].apply(
             lambda x: f"Rp {x:,.0f}"
         )
 
-        df = df[[
+        display = display[[
             "Asset",
             "Allocation",
             "Amount",
@@ -246,7 +249,22 @@ Format:
             "Return (Rp)"
         ]]
 
-        st.dataframe(df,use_container_width=True)
+        st.dataframe(display,use_container_width=True)
 
-        st.write("Strength:",p.get("strength","-"))
-        st.write("Weakness:",p.get("weakness","-"))
+# -----------------------------
+# AI EXPLANATION
+# -----------------------------
+
+        explanation_prompt = f"""
+Explain this investment portfolio in Bahasa Indonesia.
+
+{df.to_string()}
+"""
+
+        exp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role":"user","content":explanation_prompt}],
+            temperature=0.3
+        )
+
+        st.write(exp.choices[0].message.content)
