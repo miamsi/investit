@@ -327,12 +327,27 @@ ticker = st.selectbox(
     ihsg["ticker"].tolist()
 )
 
-price_data = yf.download(ticker, period="1y")
-
-fig2 = px.line(
-    price_data,
-    y="Close",
-    title=f"{ticker} Price Chart"
+price_data = yf.download(
+    ticker,
+    period="1y",
+    progress=False
 )
 
-st.plotly_chart(fig2, use_container_width=True)
+if price_data.empty:
+    st.warning("No price data available.")
+else:
+
+    # Handle multi-index columns from yfinance
+    if isinstance(price_data.columns, pd.MultiIndex):
+        price_data.columns = price_data.columns.get_level_values(0)
+
+    if "Close" not in price_data.columns:
+        st.error("Close price not found in dataset.")
+    else:
+        fig2 = px.line(
+            price_data,
+            y="Close",
+            title=f"{ticker} Price Chart"
+        )
+
+        st.plotly_chart(fig2, use_container_width=True)
