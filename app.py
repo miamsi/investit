@@ -2,20 +2,19 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-st.title("📊 Investment Portfolio Dashboard")
+st.title("📊 Investment Card Monitor")
 
-# --- Portfolio Data ---
-data = {
-    "Ticker": ["BBRI.JK", "PTBA.JK", "TLKM.JK", "ANTM.JK", "PNBN.JK", "TAPG.JK"],
-    "Shares": [3300, 3600, 1600, 1000, 1000, 1000],
-    "Buy Price": [3600, 2400, 3800, 1500, 1500, 4000],
-    "Dividend Yield": [0.09, 0.18, 0.075, 0.05, 0.02, 0.06]
+portfolio = {
+    "Ticker": ["BBRI.JK", "PTBA.JK", "TLKM.JK"],
+    "Stock": ["BBRI", "PTBA", "TLKM"],
+    "Buy Min": [3400, 2200, 3500],
+    "Buy Max": [3650, 2500, 3900]
 }
 
-df = pd.DataFrame(data)
+df = pd.DataFrame(portfolio)
 
-# --- Get Market Data ---
 prices = []
+
 for ticker in df["Ticker"]:
     stock = yf.Ticker(ticker)
     price = stock.history(period="1d")["Close"].iloc[-1]
@@ -23,40 +22,29 @@ for ticker in df["Ticker"]:
 
 df["Current Price"] = prices
 
-# --- Calculations ---
-df["Market Value"] = df["Shares"] * df["Current Price"]
-df["Cost Basis"] = df["Shares"] * df["Buy Price"]
-df["Unrealized P/L"] = df["Market Value"] - df["Cost Basis"]
-df["Dividend Income"] = df["Market Value"] * df["Dividend Yield"]
+def decision(row):
+    if row["Current Price"] <= row["Buy Max"] and row["Current Price"] >= row["Buy Min"]:
+        return "🟢 BUY ZONE"
+    elif row["Current Price"] < row["Buy Min"]:
+        return "🔥 STRONG BUY"
+    else:
+        return "⏳ WAIT"
 
-# --- Display Table ---
-st.subheader("📈 Stock Portfolio")
+df["Decision"] = df.apply(decision, axis=1)
+
+st.subheader("Investment Entry Table")
+
 st.dataframe(df)
 
-# --- Totals ---
-total_value = df["Market Value"].sum()
-total_cost = df["Cost Basis"].sum()
-total_pl = df["Unrealized P/L"].sum()
-total_dividend = df["Dividend Income"].sum()
+st.subheader("Quick Signals")
 
-# --- Bonds (manual input) ---
-st.subheader("💰 Bond Income")
+for i,row in df.iterrows():
 
-bond_nominal = st.number_input("Total Bond Nominal", value=50000000)
-bond_coupon = st.number_input("Average Coupon Rate", value=0.064)
+    if row["Decision"] == "🟢 BUY ZONE":
+        st.success(f"{row['Stock']} is in BUY ZONE")
 
-bond_income = bond_nominal * bond_coupon * 0.9
+    elif row["Decision"] == "🔥 STRONG BUY":
+        st.error(f"{row['Stock']} is STRONG BUY")
 
-# --- Portfolio Summary ---
-st.subheader("📊 Portfolio Summary")
-
-st.metric("Portfolio Value", f"Rp {total_value:,.0f}")
-st.metric("Unrealized P/L", f"Rp {total_pl:,.0f}")
-st.metric("Estimated Stock Dividend", f"Rp {total_dividend:,.0f}")
-st.metric("Bond Income", f"Rp {bond_income:,.0f}")
-
-total_income = total_dividend + bond_income
-
-st.subheader("💵 Total Annual Cashflow")
-
-st.metric("Total Income", f"Rp {total_income:,.0f}")
+    else:
+        st.warning(f"{row['Stock']} still above buy range")
