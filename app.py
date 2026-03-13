@@ -27,27 +27,50 @@ bonds = load_bonds()
 
 st.sidebar.header("Investment Preferences")
 
-capital = st.sidebar.number_input("Investment Capital (IDR)", value=30000000)
+capital = st.sidebar.number_input(
+    "Investment Capital (IDR)",
+    value=30000000
+)
 
-stock_percent = st.sidebar.slider("Stock Allocation %",0,100,60)
+stock_percent = st.sidebar.slider(
+    "Stock Allocation %",
+    0,100,60
+)
+
 bond_percent = 100 - stock_percent
 
-min_dividend = st.sidebar.number_input("Minimal Stock Dividend Yield %",value=3.0)
-min_coupon = st.sidebar.number_input("Minimal Bond Coupon %",value=6.0)
+min_dividend = st.sidebar.number_input(
+    "Minimal Stock Dividend Yield %",
+    value=3.0
+)
+
+min_coupon = st.sidebar.number_input(
+    "Minimal Bond Coupon %",
+    value=6.0
+)
 
 growth_preference = st.sidebar.selectbox(
     "Stock Preference",
     ["Capital Growth","High Dividend"]
 )
 
-max_stocks = st.sidebar.slider("Maximum Number of Stocks",1,20,5)
-max_bonds = st.sidebar.slider("Maximum Number of Bonds",1,20,3)
+max_stocks = st.sidebar.slider(
+    "Maximum Number of Stocks",
+    1,20,5
+)
+
+max_bonds = st.sidebar.slider(
+    "Maximum Number of Bonds",
+    1,20,3
+)
 
 # -----------------------------
 # FILTER STOCKS
 # -----------------------------
 
-stock_candidates = stocks[stocks["dividend_yield"] >= min_dividend].copy()
+stock_candidates = stocks[
+    stocks["dividend_yield"] >= min_dividend
+].copy()
 
 if growth_preference == "Capital Growth":
 
@@ -57,6 +80,7 @@ if growth_preference == "Capital Growth":
     ) / stock_candidates["live_price_2026"]
 
 else:
+
     stock_candidates["score"] = stock_candidates["dividend_yield"]
 
 stock_candidates = stock_candidates.sort_values(
@@ -88,63 +112,52 @@ st.subheader("Bond Candidates")
 st.dataframe(bond_candidates)
 
 # -----------------------------
-# BUILD RETURN LOOKUP
-# -----------------------------
-
-stock_returns = {}
-
-for _, r in stock_candidates.iterrows():
-
-    ticker = str(r["ticker"]).replace(".JK","").strip()
-
-    growth = (
-        r["predicted_high"] -
-        r["live_price_2026"]
-    ) / r["live_price_2026"]
-
-    total_return = growth + r["dividend_yield"]/100
-
-    stock_returns[ticker] = total_return
-
-bond_returns = {}
-
-for _, r in bond_candidates.iterrows():
-
-    code = str(r["BOND'S CODE"]).strip()
-
-    bond_returns[code] = r["YEARLY COUPON RATE"]/100
-
-# -----------------------------
-# GENERATE PORTFOLIOS
+# AI PORTFOLIO GENERATION
 # -----------------------------
 
 if st.button("Generate Portfolio Options"):
 
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-    stock_list = list(stock_candidates["ticker"].str.replace(".JK",""))
-    bond_list = list(bond_candidates["BOND'S CODE"])
+    stocks_ai = stock_candidates[
+        ["ticker","live_price_2026","dividend_yield"]
+    ].to_json(orient="records")
+
+    bonds_ai = bond_candidates[
+        ["BOND'S CODE","PRICE","YEARLY COUPON RATE"]
+    ].to_json(orient="records")
 
     prompt = f"""
 You are an Indonesian investment advisor.
 
-Available stocks:
-{stock_list}
+Capital: {capital}
+Stock allocation target: {stock_percent}%
+Bond allocation target: {bond_percent}%
 
-Available bonds:
-{bond_list}
+Available Stocks:
+{stocks_ai}
 
-Create 3 portfolios.
+Available Bonds:
+{bonds_ai}
 
-Return JSON only.
+Create 3 different portfolios.
+
+Rules:
+- Use only the assets provided
+- Allocation must sum to 100
+- Do not invent tickers
+
+Return JSON ONLY.
 
 Format:
 
 [
 {{
-"name":"Income Portfolio",
-"stocks":["BBCA","TLKM"],
-"bonds":["FR0080","FR0083"]
+"name":"Portfolio A",
+"allocation":[
+{{"asset":"BBCA","percent":30}},
+{{"asset":"FR0080","percent":40}}
+]
 }}
 ]
 """
@@ -165,106 +178,154 @@ Format:
         st.stop()
 
 # -----------------------------
-# BUILD PORTFOLIO TABLES
+# LOOKUP TABLES
 # -----------------------------
+
+    stock_lookup = stock_candidates.set_index("ticker")
+    bond_lookup = bond_candidates.set_index("BOND'S CODE")
+
+# -----------------------------
+# BUILD PORTFOLIOS
+# -----------------------------
+
+    summary_text = ""
 
     for p in portfolios:
 
         st.subheader(p["name"])
 
-        stocks = p["stocks"]
-        bonds = p["bonds"]
-
-        assets = stocks + bonds
-
-        allocation = 100 / len(assets)
-
         rows = []
 
-        for asset in assets:
+        for a in p["allocation"]:
 
-            if asset in stock_returns:
-                r = stock_returns[asset]
+            asset = a["asset"]
+            percent = a["percent"]
 
-            elif asset in bond_returns:
-                r = bond_returns[asset]
+            amount = capital * percent/100
 
-            else:
-                r = 0
+            # -----------------------------
+            # STOCK
+            # -----------------------------
 
-            amount = capital * allocation / 100
-            ret_rp = amount * r
+            if asset in stock_lookup.index:
 
-            rows.append({
-                "Asset":asset,
-                "Allocation %":allocation,
-                "Amount":amount,
-                "Return %":r,
-                "Return (Rp)":ret_rp
-            })
+                price = stock_lookup.loc[asset]["live_price_2026"]
+                dy = stock_lookup.loc[asset]["dividend_yield"] / 100
+
+                shares = amount / price
+                income = amount * dy
+
+                rows.append({
+                    "Asset":asset,
+                    "Allocation":f"{percent}%",
+                    "Amount":amount,
+                    "Units":round(shares),
+                    "Income":income
+                })
+
+            # -----------------------------
+            # BOND
+            # -----------------------------
+
+            elif asset in bond_lookup.index:
+
+                price = bond_lookup.loc[asset]["PRICE"]
+                coupon = bond_lookup.loc[asset]["YEARLY COUPON RATE"]/100
+
+                units = amount / price
+
+                income = units * 1000000 * coupon
+
+                rows.append({
+                    "Asset":asset,
+                    "Allocation":f"{percent}%",
+                    "Amount":amount,
+                    "Units":round(units),
+                    "Income":income
+                })
 
         df = pd.DataFrame(rows)
 
 # -----------------------------
-# TOTAL ROW
+# TOTALS
 # -----------------------------
 
-        total = pd.DataFrame([{
+        total_amount = df["Amount"].sum()
+        total_income = df["Income"].sum()
+
+        total_row = pd.DataFrame([{
             "Asset":"TOTAL",
-            "Allocation %":df["Allocation %"].sum(),
-            "Amount":df["Amount"].sum(),
-            "Return %":None,
-            "Return (Rp)":df["Return (Rp)"].sum()
+            "Allocation":"100%",
+            "Amount":total_amount,
+            "Units":"",
+            "Income":total_income
         }])
 
-        df = pd.concat([df,total],ignore_index=True)
+        df = pd.concat([df,total_row],ignore_index=True)
 
 # -----------------------------
-# FORMAT DISPLAY
+# FORMAT TABLE
 # -----------------------------
 
-        display = df.copy()
-
-        display["Allocation"] = display["Allocation %"].apply(
-            lambda x: "" if pd.isna(x) else f"{x:.0f}%"
+        df["Amount"] = df["Amount"].apply(
+            lambda x: f"Rp {x:,.0f}" if x!="" else ""
         )
 
-        display["Amount"] = display["Amount"].apply(
-            lambda x: f"Rp {x:,.0f}"
+        df["Income"] = df["Income"].apply(
+            lambda x: f"Rp {x:,.0f}" if x!="" else ""
         )
 
-        display["Return %"] = display["Return %"].apply(
-            lambda x: "" if pd.isna(x) else f"{x*100:.2f}%"
-        )
+        df = df.rename(columns={
+            "Units":"Shares / Units",
+            "Income":"Annual Income"
+        })
 
-        display["Return (Rp)"] = display["Return (Rp)"].apply(
-            lambda x: f"Rp {x:,.0f}"
-        )
-
-        display = display[[
-            "Asset",
-            "Allocation",
-            "Amount",
-            "Return %",
-            "Return (Rp)"
-        ]]
-
-        st.dataframe(display,use_container_width=True)
+        st.dataframe(df,use_container_width=True)
 
 # -----------------------------
-# AI EXPLANATION
+# SUMMARY FOR AI
 # -----------------------------
 
-        explanation_prompt = f"""
-Explain this investment portfolio in Bahasa Indonesia.
+        monthly_income = total_income/12
 
-{df.to_string()}
+        summary_text += f"""
+{p['name']}
+Capital: {capital}
+Annual Income: {round(total_income)}
+Monthly Income: {round(monthly_income)}
+Assets: {', '.join([x['asset'] for x in p['allocation']])}
+
 """
 
-        exp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role":"user","content":explanation_prompt}],
-            temperature=0.3
-        )
+# -----------------------------
+# AI NARRATIVE
+# -----------------------------
 
-        st.write(exp.choices[0].message.content)
+    explanation_prompt = f"""
+You are a financial advisor.
+
+Below are 3 portfolios with their annual income results.
+
+{summary_text}
+
+Explain the differences between the portfolios.
+
+Write a narrative explanation comparing them.
+
+Rules:
+- TEXT ONLY
+- No tables
+- No new numbers
+- No dataframe
+"""
+
+    completion = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role":"user","content":explanation_prompt}],
+        temperature=0.4
+    )
+
+    explanation = completion.choices[0].message.content
+
+    st.subheader("AI Portfolio Explanation")
+    st.write(explanation)
