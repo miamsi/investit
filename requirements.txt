@@ -1,8 +1,5 @@
 streamlit
-pandas
-numpy
 yfinance
-plotly
-scipy
-groq
-openpyxl
+pandas
+supabase
+python-dotenv
