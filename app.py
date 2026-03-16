@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 from supabase import create_client
 import datetime
+from groq import Groq
 
 st.set_page_config(page_title="Investment Card Monitor", layout="wide")
 
@@ -36,6 +37,12 @@ url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
 
 supabase = create_client(url, key)
+
+# -------------------------
+# GROQ CLIENT
+# -------------------------
+
+groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # -------------------------
 # REFRESH BUTTON
@@ -246,3 +253,111 @@ if not transactions.empty:
 else:
 
     st.write("No trades recorded yet.")
+
+# =========================
+# FUNDAMENTAL SNAPSHOT
+# =========================
+
+@st.cache_data(ttl=3600)
+def get_fundamentals(ticker):
+
+    stock = yf.Ticker(ticker)
+    info = stock.info
+
+    return {
+        "Ticker": ticker,
+        "Price": info.get("currentPrice"),
+        "PE": info.get("trailingPE"),
+        "PB": info.get("priceToBook"),
+        "Dividend Yield": info.get("dividendYield"),
+        "ROE": info.get("returnOnEquity"),
+        "Beta": info.get("beta")
+    }
+
+fundamentals = []
+
+for t in portfolio["Ticker"]:
+    fundamentals.append(get_fundamentals(t))
+
+fundamental_df = pd.DataFrame(fundamentals)
+
+st.subheader("Fundamental Snapshot")
+
+st.dataframe(fundamental_df)
+
+# =========================
+# NEWS CRAWLER
+# =========================
+
+@st.cache_data(ttl=1800)
+def get_news(ticker):
+
+    stock = yf.Ticker(ticker)
+
+    news = stock.news
+
+    headlines = []
+
+    for n in news[:5]:
+        headlines.append(n["title"])
+
+    return headlines
+
+news_data = {}
+
+for t in portfolio["Ticker"]:
+    news_data[t] = get_news(t)
+
+# =========================
+# AI ANALYSIS
+# =========================
+
+def generate_ai_report():
+
+    prompt = f"""
+    Kamu adalah analis pasar saham Indonesia.
+
+    Data fundamental saham:
+
+    {fundamental_df.to_string(index=False)}
+
+    News terbaru:
+
+    {news_data}
+
+    Buat laporan analisis dalam Bahasa Indonesia yang mencakup:
+
+    1. Analisis setiap saham
+    2. Perbandingan valuasi
+    3. Sentimen berita
+    4. Prospek 1 bulan
+    5. Risiko utama
+    6. Kesimpulan portofolio
+    """
+
+    completion = groq_client.chat.completions.create(
+
+        model="llama3-70b-8192",
+
+        messages=[
+            {"role": "user", "content": prompt}
+        ],
+
+        temperature=0.3
+    )
+
+    return completion.choices[0].message.content
+
+# =========================
+# AI REPORT BUTTON
+# =========================
+
+st.subheader("AI Portfolio Analyst")
+
+if st.button("Generate AI Analysis"):
+
+    with st.spinner("Analyzing market..."):
+
+        report = generate_ai_report()
+
+        st.markdown(report)
