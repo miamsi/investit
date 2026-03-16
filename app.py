@@ -419,26 +419,55 @@ st.dataframe(fundamental_df)
 def generate_ai_report():
 
     prompt=f"""
-Kamu analis saham Indonesia.
+Kamu adalah analis saham Indonesia.
 
-Data fundamental:
+Gunakan data berikut untuk menganalisis portofolio.
+
+DATA FUNDAMENTAL:
 {fundamental_df.to_string(index=False)}
 
-Market signals:
+DATA MARKET SIGNALS:
 {df.to_string(index=False)}
 
-Berikan analisis portofolio dan prospek 1 bulan.
+Penjelasan kolom penting:
+- Peer 1M % = rata-rata performa saham peer dalam sektor yang sama selama 1 bulan
+- Stock 1M % = performa saham tersebut selama 1 bulan
+- Jika Stock 1M % lebih rendah dari Peer 1M %, berarti saham underperform sektor
+- Jika Stock 1M % lebih tinggi dari Peer 1M %, berarti saham outperform sektor
+
+Tugas kamu:
+
+1. Analisis setiap saham satu per satu
+2. Bandingkan performa saham dengan peer sektor
+3. Jelaskan apakah pergerakan saham:
+   - mengikuti sektor
+   - atau bergerak sendiri
+4. Analisis valuasi fundamental (PE, PB, ROE, Dividend Yield)
+5. Berikan outlook 1 bulan
+6. Sebutkan risiko utama
+7. Berikan kesimpulan portofolio secara keseluruhan
+
+Gunakan bahasa Indonesia profesional namun mudah dipahami investor retail.
+
+Format jawaban:
+
+SAHAM: BBRI
+- Performa vs peer:
+- Analisis fundamental:
+- Sentimen sektor:
+- Outlook 1 bulan:
+- Risiko:
+
+Ulangi untuk semua saham.
 """
 
-    completion=groq_client.chat.completions.create(
-
-    model="llama-3.3-70b-versatile",
-
-    messages=[{"role":"user","content":prompt}],
-
-    temperature=0.3
-
+    completion = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role":"user","content":prompt}],
+        temperature=0.3
     )
+
+    return completion.choices[0].message.content
 
     return completion.choices[0].message.content
 
