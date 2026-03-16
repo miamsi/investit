@@ -58,11 +58,11 @@ st.caption(f"Last update: {datetime.datetime.now().strftime('%H:%M:%S')}")
 # -------------------------
 
 portfolio = {
-    "Ticker": ["BBRI.JK", "PTBA.JK", "TLKM.JK"],
-    "Stock": ["BBRI", "PTBA", "TLKM"],
-    "Buy Min": [3400, 2200, 3500],
-    "Buy Max": [3650, 2500, 3900],
-    "Target Capital": [11880000, 9000000, 6080000]
+    "Ticker": ["BBRI.JK", "PTBA.JK", "TLKM.JK", "BSSR.JK"],
+    "Stock": ["BBRI", "PTBA", "TLKM", "BSSR"],
+    "Buy Min": [3400, 2200, 3500, 3600],
+    "Buy Max": [3650, 2500, 3900, 4200],
+    "Target Capital": [11880000, 9000000, 6080000, 6080000]
 }
 
 df = pd.DataFrame(portfolio)
