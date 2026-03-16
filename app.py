@@ -8,6 +8,15 @@ from groq import Groq
 st.set_page_config(page_title="Investment Card Monitor", layout="wide")
 
 # -------------------------
+# FORMAT RUPIAH
+# -------------------------
+
+def format_rupiah(value):
+    if pd.isna(value):
+        return "-"
+    return f"Rp {value:,.0f}".replace(",", ".")
+
+# -------------------------
 # PASSWORD PROTECTION
 # -------------------------
 
@@ -34,7 +43,6 @@ check_password()
 
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
-
 supabase = create_client(url, key)
 
 # -------------------------
@@ -259,7 +267,14 @@ df["Gain/Loss %"]=((df["Current Price"]-df["Avg Price"])/df["Avg Price"]*100).fi
 
 st.subheader("Market Signals")
 
-st.dataframe(df[[
+market_df = df.copy()
+
+market_df["Current Price"] = market_df["Current Price"].apply(format_rupiah)
+market_df["Buy Min"] = market_df["Buy Min"].apply(format_rupiah)
+market_df["Buy Max"] = market_df["Buy Max"].apply(format_rupiah)
+market_df["MA200"] = market_df["MA200"].apply(format_rupiah)
+
+st.dataframe(market_df[[
 "Stock",
 "Current Price",
 "Buy Min",
@@ -278,7 +293,12 @@ st.dataframe(df[[
 
 st.subheader("Portfolio Performance")
 
-st.dataframe(df[[
+perf_df = df.copy()
+
+perf_df["Avg Price"] = perf_df["Avg Price"].apply(format_rupiah)
+perf_df["Current Price"] = perf_df["Current Price"].apply(format_rupiah)
+
+st.dataframe(perf_df[[
 "Stock",
 "Avg Price",
 "Current Price",
@@ -296,9 +316,13 @@ progress_df=df[[
 "Target Capital",
 "capital_used",
 "Remaining Capital"
-]]
+]].copy()
 
 progress_df.columns=["Stock","Target","Invested","Remaining"]
+
+progress_df["Target"]=progress_df["Target"].apply(format_rupiah)
+progress_df["Invested"]=progress_df["Invested"].apply(format_rupiah)
+progress_df["Remaining"]=progress_df["Remaining"].apply(format_rupiah)
 
 st.dataframe(progress_df)
 
@@ -309,8 +333,8 @@ progress=total_used/total_target if total_target>0 else 0
 
 st.progress(progress)
 
-st.write(f"Capital Used: Rp{int(total_used):,}")
-st.write(f"Remaining Capital: Rp{int(total_target-total_used):,}")
+st.write(f"Capital Used: {format_rupiah(total_used)}")
+st.write(f"Remaining Capital: {format_rupiah(total_target-total_used)}")
 
 # -------------------------
 # EXECUTE BUY
@@ -345,7 +369,11 @@ st.subheader("Transaction History")
 
 if not transactions.empty:
 
-    st.dataframe(transactions[[
+    trans_df = transactions.copy()
+
+    trans_df["capital_used"] = trans_df["capital_used"].apply(format_rupiah)
+
+    st.dataframe(trans_df[[
     "ticker",
     "shares",
     "price",
