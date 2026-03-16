@@ -3,3 +3,4 @@ yfinance
 pandas
 supabase
 python-dotenv
+groq
