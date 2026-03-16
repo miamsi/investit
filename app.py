@@ -34,6 +34,7 @@ check_password()
 
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
+
 supabase = create_client(url, key)
 
 # -------------------------
@@ -100,27 +101,22 @@ def get_stock_data(ticker):
 
     return price, ma200, month_change
 
-
 def get_peer_performance(peers):
 
     perf = []
 
     for p in peers:
-
         try:
             hist = yf.Ticker(p).history(period="1mo")
-
             change = (hist["Close"].iloc[-1] - hist["Close"].iloc[0]) / hist["Close"].iloc[0] * 100
-
             perf.append(change)
-
         except:
             continue
 
-    if len(perf) == 0:
+    if len(perf)==0:
         return 0
 
-    return sum(perf) / len(perf)
+    return sum(perf)/len(perf)
 
 prices=[]
 ma200_list=[]
@@ -156,12 +152,12 @@ for ticker in df["Ticker"]:
     peer_perf.append(round(peer_change,2))
     stock_perf.append(round(change,2))
 
-df["Current Price"] = prices
-df["MA200"] = ma200_list
-df["MA200 Distance %"] = distance_list
-df["MA Signal"] = ma_signal_list
-df["Peer 1M %"] = peer_perf
-df["Stock 1M %"] = stock_perf
+df["Current Price"]=prices
+df["MA200"]=ma200_list
+df["MA200 Distance %"]=distance_list
+df["MA Signal"]=ma_signal_list
+df["Peer 1M %"]=peer_perf
+df["Stock 1M %"]=stock_perf
 
 # -------------------------
 # BUY DECISION
@@ -178,10 +174,10 @@ def decision(row):
     else:
         return "WAIT"
 
-df["Decision"] = df.apply(decision, axis=1)
+df["Decision"]=df.apply(decision,axis=1)
 
 # -------------------------
-# AI BUY SIGNAL
+# AI SIGNAL
 # -------------------------
 
 def ai_signal(row):
@@ -197,7 +193,7 @@ def ai_signal(row):
 
     return "WAIT"
 
-df["AI Buy Signal"] = df.apply(ai_signal,axis=1)
+df["AI Buy Signal"]=df.apply(ai_signal,axis=1)
 
 # -------------------------
 # AI INTERPRETATION
@@ -212,42 +208,50 @@ def interpret(row):
         return "Ideal entry. Price inside buy range and momentum healthy."
 
     if m=="WAIT" and a=="WATCH":
-        return "Sector momentum positive but price above buy zone. Monitor pullback."
+        return "Sector momentum positive but price above buy zone."
 
     if m=="STRONG BUY" and a=="WAIT":
-        return "Price cheap but sector momentum weak. Risk of falling knife."
+        return "Cheap but sector weak. Risk of falling knife."
 
     if m=="BUY ZONE" and a=="WAIT":
-        return "Price acceptable but stock slightly overextended."
+        return "Buy zone reached but momentum slightly overextended."
 
     return "Neutral condition."
 
-df["AI Interpretation"] = df.apply(interpret,axis=1)
+df["AI Interpretation"]=df.apply(interpret,axis=1)
 
 # -------------------------
 # LOAD TRANSACTIONS
 # -------------------------
 
-response = supabase.table("transactions").select("*").execute()
-transactions = pd.DataFrame(response.data)
+response=supabase.table("transactions").select("*").execute()
+transactions=pd.DataFrame(response.data)
 
 if not transactions.empty:
 
     avg_price = transactions.groupby("ticker").apply(
-        lambda x: (x["shares"]*x["price"]).sum()/x["shares"].sum()
+        lambda x:(x["shares"]*x["price"]).sum()/x["shares"].sum()
     )
 
     avg_price = avg_price.reset_index(name="Avg Price")
 
-    df = df.merge(avg_price, how="left", left_on="Stock", right_on="ticker")
+    df=df.merge(avg_price,how="left",left_on="Stock",right_on="ticker")
 
-    df["Avg Price"] = df["Avg Price"].fillna(0)
+    summary = transactions.groupby("ticker")["capital_used"].sum().reset_index()
+
+    df=df.merge(summary,how="left",left_on="Stock",right_on="ticker")
 
 else:
 
     df["Avg Price"]=0
+    df["capital_used"]=0
 
-df["Gain/Loss %"] = ((df["Current Price"]-df["Avg Price"])/df["Avg Price"]*100).fillna(0)
+df["capital_used"]=df["capital_used"].fillna(0)
+df["Avg Price"]=df["Avg Price"].fillna(0)
+
+df["Remaining Capital"]=df["Target Capital"]-df["capital_used"]
+
+df["Gain/Loss %"]=((df["Current Price"]-df["Avg Price"])/df["Avg Price"]*100).fillna(0)
 
 # -------------------------
 # MARKET SIGNAL TABLE
@@ -255,22 +259,18 @@ df["Gain/Loss %"] = ((df["Current Price"]-df["Avg Price"])/df["Avg Price"]*100).
 
 st.subheader("Market Signals")
 
-st.dataframe(
-    df[
-        [
-            "Stock",
-            "Current Price",
-            "Buy Min",
-            "Buy Max",
-            "MA200",
-            "MA200 Distance %",
-            "MA Signal",
-            "Decision",
-            "AI Buy Signal",
-            "AI Interpretation"
-        ]
-    ]
-)
+st.dataframe(df[[
+"Stock",
+"Current Price",
+"Buy Min",
+"Buy Max",
+"MA200",
+"MA200 Distance %",
+"MA Signal",
+"Decision",
+"AI Buy Signal",
+"AI Interpretation"
+]])
 
 # -------------------------
 # PORTFOLIO PERFORMANCE
@@ -278,16 +278,83 @@ st.dataframe(
 
 st.subheader("Portfolio Performance")
 
-st.dataframe(
-    df[
-        [
-            "Stock",
-            "Avg Price",
-            "Current Price",
-            "Gain/Loss %",
-        ]
-    ]
-)
+st.dataframe(df[[
+"Stock",
+"Avg Price",
+"Current Price",
+"Gain/Loss %"
+]])
+
+# -------------------------
+# PORTFOLIO DEPLOYMENT
+# -------------------------
+
+st.subheader("Portfolio Deployment")
+
+progress_df=df[[
+"Stock",
+"Target Capital",
+"capital_used",
+"Remaining Capital"
+]]
+
+progress_df.columns=["Stock","Target","Invested","Remaining"]
+
+st.dataframe(progress_df)
+
+total_target=df["Target Capital"].sum()
+total_used=df["capital_used"].sum()
+
+progress=total_used/total_target if total_target>0 else 0
+
+st.progress(progress)
+
+st.write(f"Capital Used: Rp{int(total_used):,}")
+st.write(f"Remaining Capital: Rp{int(total_target-total_used):,}")
+
+# -------------------------
+# EXECUTE BUY
+# -------------------------
+
+st.subheader("Execute Buy")
+
+ticker_choice=st.selectbox("Stock",df["Stock"])
+
+shares=st.number_input("Shares",min_value=1,step=1)
+
+price=st.number_input("Execution Price",min_value=1.0,step=1.0)
+
+if st.button("Record Buy"):
+
+    capital=shares*price
+
+    supabase.table("transactions").insert({
+        "ticker":ticker_choice,
+        "shares":shares,
+        "price":price,
+        "capital_used":capital
+    }).execute()
+
+    st.success("Trade recorded")
+
+# -------------------------
+# TRANSACTION HISTORY
+# -------------------------
+
+st.subheader("Transaction History")
+
+if not transactions.empty:
+
+    st.dataframe(transactions[[
+    "ticker",
+    "shares",
+    "price",
+    "capital_used",
+    "created_at"
+    ]])
+
+else:
+    st.write("No trades recorded yet.")
 
 # -------------------------
 # FUNDAMENTALS
@@ -296,17 +363,17 @@ st.dataframe(
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
 
-    stock = yf.Ticker(ticker)
-    info = stock.info
+    stock=yf.Ticker(ticker)
+    info=stock.info
 
-    return {
-        "Ticker": ticker,
-        "Price": info.get("currentPrice"),
-        "PE": info.get("trailingPE"),
-        "PB": info.get("priceToBook"),
-        "Dividend Yield": info.get("dividendYield"),
-        "ROE": info.get("returnOnEquity"),
-        "Beta": info.get("beta")
+    return{
+    "Ticker":ticker,
+    "Price":info.get("currentPrice"),
+    "PE":info.get("trailingPE"),
+    "PB":info.get("priceToBook"),
+    "Dividend Yield":info.get("dividendYield"),
+    "ROE":info.get("returnOnEquity"),
+    "Beta":info.get("beta")
     }
 
 fundamentals=[get_fundamentals(t) for t in portfolio["Ticker"]]
@@ -314,56 +381,14 @@ fundamentals=[get_fundamentals(t) for t in portfolio["Ticker"]]
 fundamental_df=pd.DataFrame(fundamentals)
 
 st.subheader("Fundamental Snapshot")
+
 st.dataframe(fundamental_df)
-
-# -------------------------
-# NEWS
-# -------------------------
-
-@st.cache_data(ttl=1800)
-def get_news(ticker):
-
-    try:
-        news=yf.Ticker(ticker).news
-    except:
-        return ["News unavailable"]
-
-    if not news:
-        return ["No recent news"]
-
-    headlines=[]
-
-    for n in news[:5]:
-
-        try:
-            if "title" in n:
-                headlines.append(n["title"])
-            elif "content" in n and "title" in n["content"]:
-                headlines.append(n["content"]["title"])
-        except:
-            continue
-
-    return headlines
-
-news_data={}
-
-for t in portfolio["Ticker"]:
-    news_data[t]=get_news(t)
 
 # -------------------------
 # AI REPORT
 # -------------------------
 
 def generate_ai_report():
-
-    news_text=""
-
-    for ticker,headlines in news_data.items():
-
-        news_text+=f"\n{ticker}\n"
-
-        for h in headlines:
-            news_text+=f"- {h}\n"
 
     prompt=f"""
 Kamu analis saham Indonesia.
@@ -374,18 +399,17 @@ Data fundamental:
 Market signals:
 {df.to_string(index=False)}
 
-News:
-{news_text}
-
 Berikan analisis portofolio dan prospek 1 bulan.
 """
 
     completion=groq_client.chat.completions.create(
 
-        model="llama-3.3-70b-versatile",
+    model="llama-3.3-70b-versatile",
 
-        messages=[{"role":"user","content":prompt}],
-        temperature=0.3
+    messages=[{"role":"user","content":prompt}],
+
+    temperature=0.3
+
     )
 
     return completion.choices[0].message.content
