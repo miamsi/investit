@@ -20,6 +20,7 @@ def check_password():
         if password == st.secrets["APP_PASSWORD"]:
             st.session_state["password_correct"] = True
             st.rerun()
+
         else:
             st.stop()
 
@@ -283,7 +284,7 @@ st.subheader("Fundamental Snapshot")
 st.dataframe(fundamental_df)
 
 # =========================
-# NEWS CRAWLER (FIXED)
+# NEWS CRAWLER
 # =========================
 
 @st.cache_data(ttl=1800)
@@ -296,10 +297,10 @@ def get_news(ticker):
     except:
         return ["News unavailable"]
 
-    headlines = []
-
     if not news_items:
         return ["No recent news"]
+
+    headlines = []
 
     for n in news_items[:5]:
 
@@ -341,44 +342,63 @@ def generate_ai_report():
 
         news_text += f"\n{ticker}\n"
 
-        for h in headlines:
+        for h in headlines[:3]:
             news_text += f"- {h}\n"
+
+    technical_data = df[
+        ["Stock","Current Price","MA200","MA200 Distance %","MA Signal","Decision"]
+    ].to_string(index=False)
+
+    fundamental_data = fundamental_df.to_string(index=False)
 
     prompt = f"""
 Kamu adalah analis saham Indonesia.
 
-Data fundamental:
+DATA TEKNIKAL:
 
-{fundamental_df.to_string(index=False)}
+{technical_data}
 
-Berita terbaru:
+DATA FUNDAMENTAL:
+
+{fundamental_data}
+
+BERITA TERBARU:
 
 {news_text}
 
 Tugas kamu:
 
-1. Analisis masing-masing saham
-2. Bandingkan valuasi
-3. Analisis sentimen berita
+1. Analisis tiap saham
+2. Valuasi mahal atau murah
+3. Sentimen berita
 4. Prospek 1 bulan
 5. Risiko utama
-6. Kesimpulan portofolio
+6. Rekomendasi BUY / WAIT / AVOID
+7. Kesimpulan portofolio
 
-Jawab dalam Bahasa Indonesia profesional namun mudah dipahami investor retail.
+Gunakan Bahasa Indonesia profesional.
 """
 
-    completion = groq_client.chat.completions.create(
+    try:
 
-        model="llama3-8b-8192",
+        completion = groq_client.chat.completions.create(
 
-        messages=[
-            {"role": "user", "content": prompt}
-        ],
+            model="llama-3.3-70b-versatile",
 
-        temperature=0.3
-    )
+            messages=[
+                {"role": "system", "content": "Kamu analis saham profesional Indonesia."},
+                {"role": "user", "content": prompt}
+            ],
 
-    return completion.choices[0].message.content
+            temperature=0.3,
+            max_tokens=1000
+        )
+
+        return completion.choices[0].message.content
+
+    except Exception as e:
+
+        return f"AI analysis error: {str(e)}"
 
 # =========================
 # AI REPORT
