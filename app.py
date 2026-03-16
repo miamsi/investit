@@ -20,7 +20,6 @@ def check_password():
         if password == st.secrets["APP_PASSWORD"]:
             st.session_state["password_correct"] = True
             st.rerun()
-
         else:
             st.stop()
 
@@ -251,7 +250,6 @@ if not transactions.empty:
     )
 
 else:
-
     st.write("No trades recorded yet.")
 
 # =========================
@@ -282,11 +280,10 @@ for t in portfolio["Ticker"]:
 fundamental_df = pd.DataFrame(fundamentals)
 
 st.subheader("Fundamental Snapshot")
-
 st.dataframe(fundamental_df)
 
 # =========================
-# NEWS CRAWLER
+# NEWS CRAWLER (FIXED)
 # =========================
 
 @st.cache_data(ttl=1800)
@@ -294,19 +291,43 @@ def get_news(ticker):
 
     stock = yf.Ticker(ticker)
 
-    news = stock.news
+    try:
+        news_items = stock.news
+    except:
+        return ["News unavailable"]
 
     headlines = []
 
-    for n in news[:5]:
-        headlines.append(n["title"])
+    if not news_items:
+        return ["No recent news"]
+
+    for n in news_items[:5]:
+
+        try:
+
+            if "title" in n:
+                headlines.append(n["title"])
+
+            elif "content" in n and "title" in n["content"]:
+                headlines.append(n["content"]["title"])
+
+            else:
+                headlines.append("Headline unavailable")
+
+        except:
+            headlines.append("Parsing error")
 
     return headlines
+
 
 news_data = {}
 
 for t in portfolio["Ticker"]:
-    news_data[t] = get_news(t)
+
+    try:
+        news_data[t] = get_news(t)
+    except:
+        news_data[t] = ["News unavailable"]
 
 # =========================
 # AI ANALYSIS
@@ -314,26 +335,37 @@ for t in portfolio["Ticker"]:
 
 def generate_ai_report():
 
+    news_text = ""
+
+    for ticker, headlines in news_data.items():
+
+        news_text += f"\n{ticker}\n"
+
+        for h in headlines:
+            news_text += f"- {h}\n"
+
     prompt = f"""
-    Kamu adalah analis pasar saham Indonesia.
+Kamu adalah analis saham Indonesia.
 
-    Data fundamental saham:
+Data fundamental:
 
-    {fundamental_df.to_string(index=False)}
+{fundamental_df.to_string(index=False)}
 
-    News terbaru:
+Berita terbaru:
 
-    {news_data}
+{news_text}
 
-    Buat laporan analisis dalam Bahasa Indonesia yang mencakup:
+Tugas kamu:
 
-    1. Analisis setiap saham
-    2. Perbandingan valuasi
-    3. Sentimen berita
-    4. Prospek 1 bulan
-    5. Risiko utama
-    6. Kesimpulan portofolio
-    """
+1. Analisis masing-masing saham
+2. Bandingkan valuasi
+3. Analisis sentimen berita
+4. Prospek 1 bulan
+5. Risiko utama
+6. Kesimpulan portofolio
+
+Jawab dalam Bahasa Indonesia profesional namun mudah dipahami investor retail.
+"""
 
     completion = groq_client.chat.completions.create(
 
@@ -349,7 +381,7 @@ def generate_ai_report():
     return completion.choices[0].message.content
 
 # =========================
-# AI REPORT BUTTON
+# AI REPORT
 # =========================
 
 st.subheader("AI Portfolio Analyst")
