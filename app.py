@@ -8,7 +8,7 @@ from groq import Groq
 st.set_page_config(page_title="Investment Card Monitor", layout="wide")
 
 # -------------------------
-# PASSWORD
+# PASSWORD PROTECTION
 # -------------------------
 
 def check_password():
@@ -29,22 +29,21 @@ def check_password():
 check_password()
 
 # -------------------------
-# SUPABASE
+# SUPABASE CONNECTION
 # -------------------------
 
-supabase = create_client(
-    st.secrets["SUPABASE_URL"],
-    st.secrets["SUPABASE_KEY"]
-)
+url = st.secrets["SUPABASE_URL"]
+key = st.secrets["SUPABASE_KEY"]
+supabase = create_client(url, key)
 
 # -------------------------
-# GROQ
+# GROQ CLIENT
 # -------------------------
 
 groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # -------------------------
-# REFRESH
+# REFRESH BUTTON
 # -------------------------
 
 col1, col2 = st.columns([6,1])
@@ -60,30 +59,28 @@ with col2:
 st.caption(f"Last update: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
 # -------------------------
-# PORTFOLIO PLAN
+# INVESTMENT PLAN
 # -------------------------
 
 portfolio = {
-    "Ticker": ["BBRI.JK","PTBA.JK","TLKM.JK","BSSR.JK"],
-    "Stock": ["BBRI","PTBA","TLKM","BSSR"],
-    "Buy Min": [3400,2200,3500,3600],
-    "Buy Max": [3650,2500,3900,4200],
-    "Target Capital": [11880000,3600000,6080000,5400000]
+    "Ticker": ["BBRI.JK", "PTBA.JK", "TLKM.JK", "BSSR.JK"],
+    "Stock": ["BBRI", "PTBA", "TLKM", "BSSR"],
+    "Buy Min": [3400, 2200, 3500, 3600],
+    "Buy Max": [3650, 2500, 3900, 4200],
+    "Target Capital": [11880000, 3600000, 6080000, 5400000]
 }
 
 df = pd.DataFrame(portfolio)
 
 # -------------------------
-# PEER MAP
+# PEER GROUPS
 # -------------------------
 
-peer_map = {
-
-    "BBRI.JK": ["BMRI.JK","BBNI.JK","BRIS.JK"],
+peer_groups = {
+    "BBRI.JK": ["BMRI.JK","BBCA.JK"],
+    "PTBA.JK": ["ADRO.JK","ITMG.JK"],
     "TLKM.JK": ["EXCL.JK","ISAT.JK"],
-    "PTBA.JK": ["ADRO.JK","ITMG.JK","BSSR.JK"],
-    "BSSR.JK": ["PTBA.JK","ADRO.JK","ITMG.JK"]
-
+    "BSSR.JK": ["ADRO.JK","ITMG.JK"]
 }
 
 # -------------------------
@@ -99,71 +96,72 @@ def get_stock_data(ticker):
     price = hist["Close"].iloc[-1]
     ma200 = hist["Close"].rolling(200).mean().iloc[-1]
 
-    return price, ma200
+    month_change = (hist["Close"].iloc[-1] - hist["Close"].iloc[-22]) / hist["Close"].iloc[-22] * 100
 
-@st.cache_data(ttl=3600)
-def get_peer_perf(ticker):
+    return price, ma200, month_change
 
-    peers = peer_map.get(ticker, [])
 
-    changes = []
+def get_peer_performance(peers):
+
+    perf = []
 
     for p in peers:
 
         try:
+            hist = yf.Ticker(p).history(period="1mo")
 
-            stock = yf.Ticker(p)
-            hist = stock.history(period="1mo")
+            change = (hist["Close"].iloc[-1] - hist["Close"].iloc[0]) / hist["Close"].iloc[0] * 100
 
-            change = (
-                hist["Close"].iloc[-1] - hist["Close"].iloc[0]
-            ) / hist["Close"].iloc[0] * 100
-
-            changes.append(change)
+            perf.append(change)
 
         except:
-            pass
+            continue
 
-    if len(changes) == 0:
-        return None
+    if len(perf) == 0:
+        return 0
 
-    return round(sum(changes)/len(changes),2)
+    return sum(perf) / len(perf)
 
 prices=[]
 ma200_list=[]
 distance_list=[]
 ma_signal_list=[]
 peer_perf=[]
+stock_perf=[]
 
 for ticker in df["Ticker"]:
 
-    price,ma200 = get_stock_data(ticker)
+    price, ma200, change = get_stock_data(ticker)
 
-    distance=(price-ma200)/ma200*100
+    distance = (price - ma200) / ma200 * 100
 
-    if distance>15:
-        signal="OVEREXTENDED"
-    elif distance>8:
-        signal="WAIT"
-    elif distance>2:
-        signal="WATCH"
-    elif distance>-3:
-        signal="BUY"
+    peers = peer_groups.get(ticker,[])
+    peer_change = get_peer_performance(peers)
+
+    if distance > 15:
+        ma_signal = "OVEREXTENDED"
+    elif distance > 8:
+        ma_signal = "WAIT"
+    elif distance > 2:
+        ma_signal = "WATCH"
+    elif distance > -3:
+        ma_signal = "BUY"
     else:
-        signal="STRONG BUY"
+        ma_signal = "STRONG BUY"
 
     prices.append(round(price,2))
     ma200_list.append(round(ma200,2))
     distance_list.append(round(distance,2))
-    ma_signal_list.append(signal)
+    ma_signal_list.append(ma_signal)
+    peer_perf.append(round(peer_change,2))
+    stock_perf.append(round(change,2))
 
-    peer_perf.append(get_peer_perf(ticker))
-
-df["Current Price"]=prices
-df["MA200"]=ma200_list
-df["MA200 Distance %"]=distance_list
-df["MA Signal"]=ma_signal_list
-df["Peer 1M %"]=peer_perf
+df["Current Price"] = prices
+df["MA200"] = ma200_list
+df["MA200 Distance %"] = distance_list
+df["MA Signal"] = ma_signal_list
+df["Peer 1M %"] = peer_perf
+df["Stock 1M %"] = stock_perf
 
 # -------------------------
 # BUY DECISION
@@ -171,58 +169,85 @@ df["Peer 1M %"]=peer_perf
 
 def decision(row):
 
-    if row["Current Price"]<=row["Buy Max"] and row["Current Price"]>=row["Buy Min"]:
+    if row["Current Price"] <= row["Buy Max"] and row["Current Price"] >= row["Buy Min"]:
         return "BUY ZONE"
 
-    elif row["Current Price"]<row["Buy Min"]:
+    elif row["Current Price"] < row["Buy Min"]:
         return "STRONG BUY"
 
     else:
         return "WAIT"
 
-df["Decision"]=df.apply(decision,axis=1)
+df["Decision"] = df.apply(decision, axis=1)
+
+# -------------------------
+# AI BUY SIGNAL
+# -------------------------
+
+def ai_signal(row):
+
+    if row["Decision"]=="BUY ZONE" and row["MA Signal"] in ["BUY","STRONG BUY"]:
+        return "BUY"
+
+    if row["Decision"]=="WAIT" and row["Peer 1M %"]>0:
+        return "WATCH"
+
+    if row["MA Signal"]=="OVEREXTENDED":
+        return "WAIT"
+
+    return "WAIT"
+
+df["AI Buy Signal"] = df.apply(ai_signal,axis=1)
+
+# -------------------------
+# AI INTERPRETATION
+# -------------------------
+
+def interpret(row):
+
+    m=row["Decision"]
+    a=row["AI Buy Signal"]
+
+    if m=="BUY ZONE" and a=="BUY":
+        return "Ideal entry. Price inside buy range and momentum healthy."
+
+    if m=="WAIT" and a=="WATCH":
+        return "Sector momentum positive but price above buy zone. Monitor pullback."
+
+    if m=="STRONG BUY" and a=="WAIT":
+        return "Price cheap but sector momentum weak. Risk of falling knife."
+
+    if m=="BUY ZONE" and a=="WAIT":
+        return "Price acceptable but stock slightly overextended."
+
+    return "Neutral condition."
+
+df["AI Interpretation"] = df.apply(interpret,axis=1)
 
 # -------------------------
 # LOAD TRANSACTIONS
 # -------------------------
 
-response=supabase.table("transactions").select("*").execute()
-
-transactions=pd.DataFrame(response.data)
-
-if not transactions.empty:
-
-    capital_summary=transactions.groupby("ticker")["capital_used"].sum().reset_index()
-
-else:
-
-    capital_summary=pd.DataFrame(columns=["ticker","capital_used"])
-
-df=df.merge(capital_summary,how="left",left_on="Stock",right_on="ticker")
-
-df["capital_used"]=df["capital_used"].fillna(0)
-
-df["Remaining Capital"]=df["Target Capital"]-df["capital_used"]
-
-# -------------------------
-# LAST BUY PRICE
-# -------------------------
+response = supabase.table("transactions").select("*").execute()
+transactions = pd.DataFrame(response.data)
 
 if not transactions.empty:
 
-    last_buy=transactions.sort_values("created_at").groupby("ticker").last().reset_index()
+    avg_price = transactions.groupby("ticker").apply(
+        lambda x: (x["shares"]*x["price"]).sum()/x["shares"].sum()
+    )
 
-    last_buy=last_buy[["ticker","price"]]
+    avg_price = avg_price.reset_index(name="Avg Price")
 
-    last_buy.columns=["Stock","Last Buy Price"]
+    df = df.merge(avg_price, how="left", left_on="Stock", right_on="ticker")
 
-    df=df.merge(last_buy,how="left",on="Stock")
+    df["Avg Price"] = df["Avg Price"].fillna(0)
 
 else:
 
-    df["Last Buy Price"]=None
+    df["Avg Price"]=0
 
-df["Vs Last Buy %"]=(df["Current Price"]-df["Last Buy Price"])/df["Last Buy Price"]*100
+df["Gain/Loss %"] = ((df["Current Price"]-df["Avg Price"])/df["Avg Price"]*100).fillna(0)
 
 # -------------------------
 # MARKET SIGNAL TABLE
@@ -230,69 +255,22 @@ df["Vs Last Buy %"]=(df["Current Price"]-df["Last Buy Price"])/df["Last Buy Pric
 
 st.subheader("Market Signals")
 
-st.dataframe(df[
-[
-"Stock",
-"Current Price",
-"Last Buy Price",
-"Vs Last Buy %",
-"Buy Min",
-"Buy Max",
-"MA200",
-"MA200 Distance %",
-"Peer 1M %",
-"MA Signal",
-"Decision"
-]
-])
-
-# -------------------------
-# PORTFOLIO DEPLOYMENT
-# -------------------------
-
-st.subheader("Portfolio Deployment")
-
-progress_df=df[
-["Stock","Target Capital","capital_used","Remaining Capital"]
-]
-
-progress_df.columns=["Stock","Target","Invested","Remaining"]
-
-st.dataframe(progress_df)
-
-total_target=df["Target Capital"].sum()
-total_used=df["capital_used"].sum()
-
-progress=total_used/total_target if total_target>0 else 0
-
-st.progress(progress)
-
-# -------------------------
-# EXECUTE BUY
-# -------------------------
-
-st.subheader("Execute Buy")
-
-ticker_choice=st.selectbox("Stock",df["Stock"])
-
-shares=st.number_input("Shares",min_value=1)
-
-price=st.number_input("Execution Price",min_value=1.0)
-
-if st.button("Record Buy"):
-
-    capital=shares*price
-
-    supabase.table("transactions").insert({
-
-        "ticker":ticker_choice,
-        "shares":shares,
-        "price":price,
-        "capital_used":capital
-
-    }).execute()
-
-    st.success("Trade recorded")
+st.dataframe(
+    df[
+        [
+            "Stock",
+            "Current Price",
+            "Buy Min",
+            "Buy Max",
+            "MA200",
+            "MA200 Distance %",
+            "MA Signal",
+            "Decision",
+            "AI Buy Signal",
+            "AI Interpretation"
+        ]
+    ]
+)
 
 # -------------------------
 # PORTFOLIO PERFORMANCE
@@ -300,54 +278,16 @@ if st.button("Record Buy"):
 
 st.subheader("Portfolio Performance")
 
-if not transactions.empty:
-
-    summary=transactions.groupby("ticker").agg(
-
-        shares=("shares","sum"),
-        capital=("capital_used","sum")
-
-    ).reset_index()
-
-    summary["avg_price"]=summary["capital"]/summary["shares"]
-
-    price_map=dict(zip(df["Stock"],df["Current Price"]))
-
-    summary["current_price"]=summary["ticker"].map(price_map)
-
-    summary["market_value"]=summary["shares"]*summary["current_price"]
-
-    summary["profit"]=summary["market_value"]-summary["capital"]
-
-    summary["return_%"]=summary["profit"]/summary["capital"]*100
-
-    st.dataframe(summary)
-
-else:
-
-    st.write("No holdings yet")
-
-# -------------------------
-# AI BUY ENGINE
-# -------------------------
-
-st.subheader("AI Buy Signal")
-
-def ai_buy_signal(row):
-
-    if row["Decision"]=="BUY ZONE" and row["MA Signal"] in ["BUY","STRONG BUY"]:
-
-        return "BUY"
-
-    if row["Peer 1M %"]!=None and row["Peer 1M %"]>0 and row["Decision"]=="WAIT":
-
-        return "WATCH"
-
-    return "WAIT"
-
-df["AI Signal"]=df.apply(ai_buy_signal,axis=1)
-
-st.dataframe(df[["Stock","Current Price","AI Signal"]])
+st.dataframe(
+    df[
+        [
+            "Stock",
+            "Avg Price",
+            "Current Price",
+            "Gain/Loss %",
+        ]
+    ]
+)
 
 # -------------------------
 # FUNDAMENTALS
@@ -356,29 +296,24 @@ st.dataframe(df[["Stock","Current Price","AI Signal"]])
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
 
-    stock=yf.Ticker(ticker)
-    info=stock.info
+    stock = yf.Ticker(ticker)
+    info = stock.info
 
     return {
-
-        "Ticker":ticker,
-        "PE":info.get("trailingPE"),
-        "PB":info.get("priceToBook"),
-        "Dividend Yield":info.get("dividendYield"),
-        "ROE":info.get("returnOnEquity")
-
+        "Ticker": ticker,
+        "Price": info.get("currentPrice"),
+        "PE": info.get("trailingPE"),
+        "PB": info.get("priceToBook"),
+        "Dividend Yield": info.get("dividendYield"),
+        "ROE": info.get("returnOnEquity"),
+        "Beta": info.get("beta")
     }
 
-fundamentals=[]
-
-for t in portfolio["Ticker"]:
-
-    fundamentals.append(get_fundamentals(t))
+fundamentals=[get_fundamentals(t) for t in portfolio["Ticker"]]
 
 fundamental_df=pd.DataFrame(fundamentals)
 
 st.subheader("Fundamental Snapshot")
-
 st.dataframe(fundamental_df)
 
 # -------------------------
@@ -388,84 +323,79 @@ st.dataframe(fundamental_df)
 @st.cache_data(ttl=1800)
 def get_news(ticker):
 
-    stock=yf.Ticker(ticker)
-
     try:
-
-        news=stock.news
-
-        return [n.get("title","") for n in news[:3]]
-
+        news=yf.Ticker(ticker).news
     except:
+        return ["News unavailable"]
 
-        return []
+    if not news:
+        return ["No recent news"]
+
+    headlines=[]
+
+    for n in news[:5]:
+
+        try:
+            if "title" in n:
+                headlines.append(n["title"])
+            elif "content" in n and "title" in n["content"]:
+                headlines.append(n["content"]["title"])
+        except:
+            continue
+
+    return headlines
 
 news_data={}
 
 for t in portfolio["Ticker"]:
-
     news_data[t]=get_news(t)
 
 # -------------------------
 # AI REPORT
 # -------------------------
 
-st.subheader("AI Portfolio Analyst")
-
 def generate_ai_report():
 
     news_text=""
 
-    for t,h in news_data.items():
+    for ticker,headlines in news_data.items():
 
-        news_text+=f"\n{t}\n"
+        news_text+=f"\n{ticker}\n"
 
-        for i in h:
-
-            news_text+=f"- {i}\n"
+        for h in headlines:
+            news_text+=f"- {h}\n"
 
     prompt=f"""
+Kamu analis saham Indonesia.
 
-Analisis portofolio saham Indonesia berikut.
-
-Technical:
-{df[['Stock','Current Price','MA200 Distance %','Peer 1M %']].to_string(index=False)}
-
-Fundamental:
+Data fundamental:
 {fundamental_df.to_string(index=False)}
+
+Market signals:
+{df.to_string(index=False)}
 
 News:
 {news_text}
 
-Beri analisis:
-1 prospek tiap saham
-2 apakah underperform sector
-3 risiko
-4 rekomendasi
-
-Jawab bahasa Indonesia.
+Berikan analisis portofolio dan prospek 1 bulan.
 """
 
-    try:
+    completion=groq_client.chat.completions.create(
 
-        completion=groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
 
-            model="llama-3.3-70b-versatile",
+        messages=[{"role":"user","content":prompt}],
+        temperature=0.3
+    )
 
-            messages=[{"role":"user","content":prompt}],
+    return completion.choices[0].message.content
 
-            temperature=0.3,
-            max_tokens=1000
-        )
-
-        return completion.choices[0].message.content
-
-    except Exception as e:
-
-        return str(e)
+st.subheader("AI Portfolio Analyst")
 
 if st.button("Generate AI Analysis"):
 
     with st.spinner("Analyzing market..."):
 
-        st.markdown(generate_ai_report())
+        report=generate_ai_report()
+
+        st.markdown(report)
