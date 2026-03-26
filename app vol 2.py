@@ -215,6 +215,28 @@ def ai_signal(row):
 df["AI Buy Signal"]=df.apply(ai_signal,axis=1)
 
 # -------------------------
+# AI INTERPRETATION
+# -------------------------
+
+def ai_interpretation(row):
+
+    if row["AI Buy Signal"] == "BUY":
+        return "Undervalued. Accumulation zone."
+
+    if row["MA Signal"] == "OVEREXTENDED":
+        return "Too hot. Wait for pullback."
+
+    if row["Decision"] == "WAIT" and row["Peer 1M %"] > 0:
+        return "Sector strong. Stock lagging."
+
+    if row["Dist From Low %"] < 10:
+        return "Near bottom. Good risk reward."
+
+    return "No edge."
+
+df["AI Interpretation"]=df.apply(ai_interpretation,axis=1)
+
+# -------------------------
 # ALTERNATIVE ENGINE
 # -------------------------
 
