@@ -108,13 +108,11 @@ def get_stock_data(ticker):
 
         price = hist["Close"].iloc[-1]
         
-        # Handle cases where history is less than 200 days
         if len(hist) >= 200:
             ma200 = hist["Close"].rolling(200).mean().iloc[-1]
         else:
             ma200 = price
             
-        # Handle cases where history is less than 22 days
         if len(hist) >= 22:
             month_change = (hist["Close"].iloc[-1] - hist["Close"].iloc[-22]) / hist["Close"].iloc[-22] * 100
         else:
@@ -136,7 +134,6 @@ def get_peer_performance(peers):
                 change = (hist["Close"].iloc[-1] - hist["Close"].iloc[0]) / hist["Close"].iloc[0] * 100
                 perf.append(change)
         except Exception as e:
-            st.warning(f"Could not fetch peer data for {p}: {e}")
             continue
 
     if len(perf)==0:
@@ -155,10 +152,7 @@ for ticker in df["Ticker"]:
 
     price, ma200, change = get_stock_data(ticker)
 
-    if ma200 != 0:
-        distance = (price - ma200) / ma200 * 100
-    else:
-        distance = 0.0
+    distance = ((price - ma200) / ma200 * 100) if ma200 != 0 else 0.0
 
     peers = peer_groups.get(ticker,[])
     peer_change = get_peer_performance(peers)
@@ -256,8 +250,7 @@ df["AI Interpretation"]=df.apply(interpret,axis=1)
 try:
     response=supabase.table("transactions").select("*").execute()
     transactions=pd.DataFrame(response.data)
-except Exception as e:
-    st.error(f"Error loading transactions from Supabase: {e}")
+except:
     transactions = pd.DataFrame()
 
 if not transactions.empty:
@@ -284,7 +277,6 @@ df["Avg Price"]=df["Avg Price"].fillna(0)
 
 df["Remaining Capital"]=df["Target Capital"]-df["capital_used"]
 
-# Prevent division by zero if Avg Price is 0
 df["Gain/Loss %"] = df.apply(
     lambda row: ((row["Current Price"] - row["Avg Price"]) / row["Avg Price"] * 100) if row["Avg Price"] != 0 else 0, 
     axis=1
@@ -366,12 +358,60 @@ st.write(f"Capital Used: {format_rupiah(total_used)}")
 st.write(f"Remaining Capital: {format_rupiah(total_target-total_used)}")
 
 # -------------------------
+# PRICE SIMULATION (THE "MIROFISH" BLOCK)
+# -------------------------
+st.divider()
+st.subheader("🔮 Price Probability Simulation")
+st.write("Simulate 5,000 potential future paths to predict the probability of a price event.")
+
+sim_col1, sim_col2, sim_col3 = st.columns(3)
+with sim_col1:
+    sim_stock = st.selectbox("Stock for Simulation", df["Stock"])
+with sim_col2:
+    sim_days = st.number_input("Days ahead", min_value=1, value=30)
+with sim_col3:
+    current_val = float(df[df["Stock"] == sim_stock]["Current Price"].iloc[0])
+    sim_target = st.number_input("Target Price Level", value=current_val * 1.05)
+
+if st.button("🚀 Run Simulation Swarm"):
+    try:
+        t_symbol = df.loc[df["Stock"] == sim_stock, "Ticker"].iloc[0]
+        h_data = yf.Ticker(t_symbol).history(period="1y")["Close"]
+        
+        if len(h_data) > 30:
+            returns = h_data.pct_change().dropna()
+            vol = returns.std()
+            drift = returns.mean() - (0.5 * vol**2)
+            
+            # Monte Carlo Logic
+            num_sims = 5000
+            daily_growth = np.exp(drift + vol * np.random.normal(0, 1, (int(sim_days), num_sims)))
+            paths = np.zeros_like(daily_growth)
+            paths[0] = h_data.iloc[-1]
+            for t in range(1, int(sim_days)):
+                paths[t] = paths[t-1] * daily_growth[t]
+            
+            # Calc Probability
+            if sim_target > h_data.iloc[-1]:
+                hits = np.sum(np.amax(paths, axis=0) >= sim_target)
+            else:
+                hits = np.sum(np.amin(paths, axis=0) <= sim_target)
+            
+            prob = (hits / num_sims) * 100
+            st.metric(f"Probability to hit {format_rupiah(sim_target)}", f"{prob:.1f}%")
+            st.line_chart(pd.DataFrame(paths[:, :50])) # Show 50 sample paths
+        else:
+            st.warning("Insufficient history for simulation.")
+    except Exception as e:
+        st.error(f"Simulation Error: {e}")
+
+# -------------------------
 # EXECUTE BUY
 # -------------------------
 
 st.subheader("Execute Buy")
 
-ticker_choice=st.selectbox("Stock",df["Stock"])
+ticker_choice=st.selectbox("Stock",df["Stock"], key="exec_buy_stock")
 
 shares=st.number_input("Shares",min_value=1,step=1)
 
@@ -380,17 +420,15 @@ price=st.number_input("Execution Price",min_value=1.0,step=1.0)
 if st.button("Record Buy"):
     try:
         capital=shares*price
-
         supabase.table("transactions").insert({
             "ticker":ticker_choice,
             "shares":shares,
             "price":price,
             "capital_used":capital
         }).execute()
-
         st.success("Trade recorded")
     except Exception as e:
-        st.error(f"Failed to record trade: {e}")
+        st.error(f"Record error: {e}")
 
 # -------------------------
 # TRANSACTION HISTORY
@@ -399,19 +437,9 @@ if st.button("Record Buy"):
 st.subheader("Transaction History")
 
 if not transactions.empty:
-
     trans_df = transactions.copy()
-
     trans_df["capital_used"] = trans_df["capital_used"].apply(format_rupiah)
-
-    st.dataframe(trans_df[[
-    "ticker",
-    "shares",
-    "price",
-    "capital_used",
-    "created_at"
-    ]])
-
+    st.dataframe(trans_df[["ticker","shares","price","capital_used","created_at"]])
 else:
     st.write("No trades recorded yet.")
 
@@ -424,146 +452,41 @@ def get_fundamentals(ticker):
     try:
         stock=yf.Ticker(ticker)
         info=stock.info
-
-        return{
-        "Ticker":ticker,
-        "Sector": info.get("sector", "Unknown"),
-        "Industry": info.get("industry", "Unknown"),
-        "Price":info.get("currentPrice"),
-        "PE":info.get("trailingPE"),
-        "PB":info.get("priceToBook"),
-        "Dividend Yield":info.get("dividendYield"),
-        "ROE":info.get("returnOnEquity"),
-        "Beta":info.get("beta")
+        return {
+            "Ticker":ticker,
+            "Sector": info.get("sector", "Unknown"),
+            "Price":info.get("currentPrice"),
+            "PE":info.get("trailingPE"),
+            "PB":info.get("priceToBook"),
+            "Dividend Yield":info.get("dividendYield"),
+            "ROE":info.get("returnOnEquity"),
+            "Beta":info.get("beta")
         }
-    except Exception as e:
-        st.warning(f"Error fetching fundamentals for {ticker}: {e}")
-        return{
-        "Ticker":ticker,
-        "Sector": "Unknown",
-        "Industry": "Unknown",
-        "Price":None,
-        "PE":None,
-        "PB":None,
-        "Dividend Yield":None,
-        "ROE":None,
-        "Beta":None
-        }
+    except:
+        return {"Ticker":ticker, "Sector": "Unknown", "Price":None, "PE":None, "PB":None, "Dividend Yield":None, "ROE":None, "Beta":None}
 
 fundamentals=[get_fundamentals(t) for t in portfolio["Ticker"]]
-
 fundamental_df=pd.DataFrame(fundamentals)
 
 st.subheader("Fundamental Snapshot")
-
 st.dataframe(fundamental_df)
-
-# -------------------------
-# PRICE SIMULATION (MONTE CARLO)
-# -------------------------
-
-st.subheader("Price Probability Simulation")
-st.markdown("Inspired by multi-scenario simulations like MiroFish, this tool runs 5,000 parallel mathematical futures (Monte Carlo Simulation) to predict the chance of hitting a target price.")
-
-sim_col1, sim_col2, sim_col3 = st.columns(3)
-with sim_col1:
-    sim_ticker = st.selectbox("Select Stock for Simulation", df["Stock"], key="sim_ticker")
-with sim_col2:
-    sim_days = st.number_input("Days to Simulate", min_value=1, max_value=252, value=30)
-with sim_col3:
-    current_float = float(df[df["Stock"] == sim_ticker]["Current Price"].iloc[0])
-    sim_target = st.number_input("Target Price", min_value=1.0, value=current_float * 1.05)
-
-if st.button("Run Simulation"):
-    with st.spinner("Running 5,000 simulation paths..."):
-        try:
-            # Match the selected Stock back to its Yahoo Finance Ticker
-            ticker_symbol = df.loc[df["Stock"] == sim_ticker, "Ticker"].iloc[0]
-            hist_data = yf.Ticker(ticker_symbol).history(period="1y")["Close"]
-            
-            if len(hist_data) > 1:
-                # Calculate daily returns, standard deviation (volatility), and drift
-                returns = hist_data.pct_change().dropna()
-                volatility = returns.std()
-                drift = returns.mean() - (0.5 * volatility ** 2)
-                
-                current_price = hist_data.iloc[-1]
-                simulations = 5000
-                
-                # Generate matrix of simulated paths
-                daily_returns = np.exp(drift + volatility * np.random.normal(0, 1, (int(sim_days), simulations)))
-                price_paths = np.zeros_like(daily_returns)
-                price_paths[0] = current_price
-                
-                for t in range(1, int(sim_days)):
-                    price_paths[t] = price_paths[t-1] * daily_returns[t]
-                    
-                # Calculate probability of successfully touching the target
-                if sim_target > current_price:
-                    successes = np.sum(np.amax(price_paths, axis=0) >= sim_target)
-                else:
-                    successes = np.sum(np.amin(price_paths, axis=0) <= sim_target)
-                    
-                probability = (successes / simulations) * 100
-                
-                st.info(f"Probability of **{sim_ticker}** touching **{format_rupiah(sim_target)}** within the next **{int(sim_days)} days** is **{probability:.2f}%**.")
-                
-                # Plot the first 50 random paths for visual representation
-                sample_paths = pd.DataFrame(price_paths[:, :50])
-                st.line_chart(sample_paths)
-            else:
-                st.warning("Not enough historical data to run simulation.")
-                
-        except Exception as e:
-            st.error(f"Simulation failed: {e}")
 
 # -------------------------
 # AI REPORT
 # -------------------------
 
 def generate_ai_report():
-
+    # Feeding sector into prompt to avoid mislabeling
     prompt=f"""
-Kamu adalah analis saham Indonesia.
+Kamu adalah analis saham Indonesia. Analisis portofolio ini:
 
-Gunakan data berikut untuk menganalisis portofolio.
-
-DATA FUNDAMENTAL:
+DATA FUNDAMENTAL (SECTOR-SPECIFIC):
 {fundamental_df.to_string(index=False)}
 
 DATA MARKET SIGNALS:
 {df.to_string(index=False)}
 
-Penjelasan kolom penting:
-- Peer 1M % = rata-rata performa saham peer dalam sektor yang sama selama 1 bulan
-- Stock 1M % = performa saham tersebut selama 1 bulan
-- Jika Stock 1M % lebih rendah dari Peer 1M %, berarti saham underperform sektor
-- Jika Stock 1M % lebih tinggi dari Peer 1M %, berarti saham outperform sektor
-
-Tugas kamu:
-
-1. Analisis setiap saham satu per satu
-2. Bandingkan performa saham dengan peer sektor
-3. Jelaskan apakah pergerakan saham:
-   - mengikuti sektor
-   - atau bergerak sendiri
-4. Analisis valuasi fundamental (PE, PB, ROE, Dividend Yield)
-5. Berikan outlook 1 bulan
-6. Sebutkan risiko utama
-7. Berikan kesimpulan portofolio secara keseluruhan
-
-Gunakan bahasa Indonesia profesional namun mudah dipahami investor retail.
-
-Format jawaban:
-
-SAHAM: BBRI
-- Performa vs peer:
-- Analisis fundamental:
-- Sentimen sektor:
-- Outlook 1 bulan:
-- Risiko:
-
-Ulangi untuk semua saham.
+Analisis setiap saham berdasarkan sektor aslinya. Outlook 1 bulan dan Risiko.
 """
     try:
         completion = groq_client.chat.completions.create(
@@ -571,17 +494,12 @@ Ulangi untuk semua saham.
             messages=[{"role":"user","content":prompt}],
             temperature=0.3
         )
-
         return completion.choices[0].message.content
     except Exception as e:
-        return f"Error generating AI report: {e}"
+        return f"AI Error: {e}"
 
 st.subheader("AI Portfolio Analyst")
 
 if st.button("Generate AI Analysis"):
-
-    with st.spinner("Analyzing market..."):
-
-        report=generate_ai_report()
-
-        st.markdown(report)
+    with st.spinner("Analyzing..."):
+        st.markdown(generate_ai_report())
