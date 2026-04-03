@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 from supabase import create_client
 import datetime
 from groq import Groq
@@ -426,6 +427,8 @@ def get_fundamentals(ticker):
 
         return{
         "Ticker":ticker,
+        "Sector": info.get("sector", "Unknown"),
+        "Industry": info.get("industry", "Unknown"),
         "Price":info.get("currentPrice"),
         "PE":info.get("trailingPE"),
         "PB":info.get("priceToBook"),
@@ -437,6 +440,8 @@ def get_fundamentals(ticker):
         st.warning(f"Error fetching fundamentals for {ticker}: {e}")
         return{
         "Ticker":ticker,
+        "Sector": "Unknown",
+        "Industry": "Unknown",
         "Price":None,
         "PE":None,
         "PB":None,
@@ -452,6 +457,65 @@ fundamental_df=pd.DataFrame(fundamentals)
 st.subheader("Fundamental Snapshot")
 
 st.dataframe(fundamental_df)
+
+# -------------------------
+# PRICE SIMULATION (MONTE CARLO)
+# -------------------------
+
+st.subheader("Price Probability Simulation")
+st.markdown("Inspired by multi-scenario simulations like MiroFish, this tool runs 5,000 parallel mathematical futures (Monte Carlo Simulation) to predict the chance of hitting a target price.")
+
+sim_col1, sim_col2, sim_col3 = st.columns(3)
+with sim_col1:
+    sim_ticker = st.selectbox("Select Stock for Simulation", df["Stock"], key="sim_ticker")
+with sim_col2:
+    sim_days = st.number_input("Days to Simulate", min_value=1, max_value=252, value=30)
+with sim_col3:
+    current_float = float(df[df["Stock"] == sim_ticker]["Current Price"].iloc[0])
+    sim_target = st.number_input("Target Price", min_value=1.0, value=current_float * 1.05)
+
+if st.button("Run Simulation"):
+    with st.spinner("Running 5,000 simulation paths..."):
+        try:
+            # Match the selected Stock back to its Yahoo Finance Ticker
+            ticker_symbol = df.loc[df["Stock"] == sim_ticker, "Ticker"].iloc[0]
+            hist_data = yf.Ticker(ticker_symbol).history(period="1y")["Close"]
+            
+            if len(hist_data) > 1:
+                # Calculate daily returns, standard deviation (volatility), and drift
+                returns = hist_data.pct_change().dropna()
+                volatility = returns.std()
+                drift = returns.mean() - (0.5 * volatility ** 2)
+                
+                current_price = hist_data.iloc[-1]
+                simulations = 5000
+                
+                # Generate matrix of simulated paths
+                daily_returns = np.exp(drift + volatility * np.random.normal(0, 1, (int(sim_days), simulations)))
+                price_paths = np.zeros_like(daily_returns)
+                price_paths[0] = current_price
+                
+                for t in range(1, int(sim_days)):
+                    price_paths[t] = price_paths[t-1] * daily_returns[t]
+                    
+                # Calculate probability of successfully touching the target
+                if sim_target > current_price:
+                    successes = np.sum(np.amax(price_paths, axis=0) >= sim_target)
+                else:
+                    successes = np.sum(np.amin(price_paths, axis=0) <= sim_target)
+                    
+                probability = (successes / simulations) * 100
+                
+                st.info(f"Probability of **{sim_ticker}** touching **{format_rupiah(sim_target)}** within the next **{int(sim_days)} days** is **{probability:.2f}%**.")
+                
+                # Plot the first 50 random paths for visual representation
+                sample_paths = pd.DataFrame(price_paths[:, :50])
+                st.line_chart(sample_paths)
+            else:
+                st.warning("Not enough historical data to run simulation.")
+                
+        except Exception as e:
+            st.error(f"Simulation failed: {e}")
 
 # -------------------------
 # AI REPORT
@@ -521,4 +585,3 @@ if st.button("Generate AI Analysis"):
         report=generate_ai_report()
 
         st.markdown(report)
-
