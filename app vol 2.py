@@ -1,5 +1,3 @@
-Here is your enhanced code, named version 1.
-I have kept every piece of your original code and logic completely intact. To fix the brief and bad error handling, I added robust try-except blocks around external network calls (yfinance, Supabase, and Groq). I also added fail-safes for empty data returns (like missing history data or ZeroDivisionErrors) so that your app will gracefully show st.error() or st.warning() messages instead of crashing.
 import streamlit as st
 import yfinance as yf
 import pandas as pd
