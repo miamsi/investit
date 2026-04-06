@@ -81,7 +81,7 @@ peer_groups = {
 def get_stock_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        # Menambah period menjadi 2y untuk memastikan rolling 200 aman
+        # Menarik data 2 tahun untuk stabilitas MA200
         hist = stock.history(period="2y")
         if hist.empty or len(hist) < 30: return 0.0, 0.0, 0.0
         price = hist["Close"].iloc[-1]
@@ -175,17 +175,31 @@ st.write(f"Capital Used: {format_rupiah(total_u)} | Remaining: {format_rupiah(to
 
 def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
     try:
-        h = yf.Ticker(ticker_symbol).history(period="1y")["Close"]
+        # Menarik data 1 tahun untuk menghitung volatilitas harian
+        h = yf.download(ticker_symbol, period="1y", progress=False)["Close"]
         if h.empty or len(h) < 30: return None
+        
         rets = h.pct_change().dropna()
-        v, d = rets.std(), rets.mean() - (0.5 * v**2)
+        v = rets.std()
+        d = rets.mean() - (0.5 * v**2)
+        
         s_price = start_price if start_price else h.iloc[-1]
+        
+        # Simulasi jalur harga
         growth = np.exp(d + v * np.random.normal(0, 1, (int(days), sims)))
-        paths = np.zeros_like(growth); paths[0] = s_price
-        for t in range(1, int(days)): paths[t] = paths[t-1] * growth[t]
-        final = paths[-1]
-        return {"p90": np.percentile(final, 10), "p50": np.percentile(final, 50), "p10": np.percentile(final, 90), "paths": paths}
-    except: return None
+        paths = np.zeros_like(growth)
+        paths[0] = s_price
+        for t in range(1, int(days)):
+            paths[t] = paths[t-1] * growth[t]
+            
+        return {
+            "p90": np.percentile(paths[-1], 10), 
+            "p50": np.percentile(paths[-1], 50), 
+            "p10": np.percentile(paths[-1], 90), 
+            "paths": paths
+        }
+    except Exception as e:
+        return None
 
 st.divider()
 st.subheader("🔮 Probability & Scenario Engine")
@@ -193,23 +207,25 @@ sim_col1, sim_col2, sim_col3 = st.columns(3)
 with sim_col1: sim_s = st.selectbox("Stock for Analysis", df["Stock"])
 with sim_col2: sim_d = st.number_input("Days ahead", min_value=1, value=30)
 with sim_col3: 
-    curr_v = float(df[df["Stock"] == sim_s]["Current Price"].iloc[0])
+    curr_row = df[df["Stock"] == sim_s]
+    curr_v = float(curr_row["Current Price"].iloc[0]) if not curr_row.empty else 0.0
     trig_v = st.number_input("What if price hits this tomorrow?", value=curr_v)
 
 if st.button("🚀 Run Probabilistic Discovery"):
     t_sym = df.loc[df["Stock"] == sim_s, "Ticker"].iloc[0]
-    res_base = run_monte_carlo(t_sym, sim_d)
-    res_shift = run_monte_carlo(t_sym, sim_d, start_price=trig_v)
-    
-    if res_base:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Most Possible (50%)", format_rupiah(res_base["p50"]))
-        c2.metric("Conservative (90%)", format_rupiah(res_base["p90"]))
-        c3.metric("Optimistic (10%)", format_rupiah(res_base["p10"]))
-        st.info(f"**Scenario Logic:** Jika harga besok menyentuh {format_rupiah(trig_v)}, maka target 'Most Possible' 30 hari bergeser ke **{format_rupiah(res_shift['p50'])}**.")
-        st.line_chart(pd.DataFrame(res_base["paths"][:, :50]))
-    else:
-        st.error(f"Gagal memuat simulasi untuk {sim_s}. Pastikan koneksi internet stabil.")
+    with st.spinner(f"Simulating {sim_s}..."):
+        res_base = run_monte_carlo(t_sym, sim_d)
+        res_shift = run_monte_carlo(t_sym, sim_d, start_price=trig_v)
+        
+        if res_base:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Most Possible (50%)", format_rupiah(res_base["p50"]))
+            c2.metric("Conservative (90%)", format_rupiah(res_base["p90"]))
+            c3.metric("Optimistic (10%)", format_rupiah(res_base["p10"]))
+            st.info(f"**Scenario Logic:** Jika harga menyentuh {format_rupiah(trig_v)}, maka target 'Most Possible' 30 hari bergeser ke **{format_rupiah(res_shift['p50'])}**.")
+            st.line_chart(pd.DataFrame(res_base["paths"][:, :50]))
+        else:
+            st.error(f"Gagal memuat data historis untuk {sim_s}. Coba lagi dalam beberapa saat.")
 
 # -------------------------
 # EXECUTE BUY / FUNDAMENTALS
@@ -223,19 +239,12 @@ if st.button("Record Trade"):
     supabase.table("transactions").insert({"ticker":t_choice, "shares":shs, "price":prc, "capital_used":shs*prc}).execute()
     st.success("Trade Recorded")
 
-@st.cache_data(ttl=3600)
-def get_fundamentals(ticker):
-    try:
-        ti = yf.Ticker(ticker).info
-        return {"Ticker": ticker, "Sector": ti.get("sector", "Unknown"), "PE": ti.get("trailingPE"), "PB": ti.get("priceToBook"), "ROE": ti.get("returnOnEquity"), "Yield": ti.get("dividendYield")}
-    except: return {"Ticker":ticker, "Sector":"Unknown"}
-
 f_df = pd.DataFrame([get_fundamentals(t) for t in portfolio["Ticker"]])
 st.subheader("Fundamental Snapshot")
 st.dataframe(f_df)
 
 # -------------------------
-# AI STRATEGIC REPORT (Version 1)
+# AI STRATEGIC REPORT
 # -------------------------
 
 st.subheader("AI Portfolio Analyst")
@@ -244,50 +253,41 @@ if st.button("Generate AI Analysis"):
         prob_summary = ""
         for _, row in df.iterrows():
             mc = run_monte_carlo(row["Ticker"], days=30, sims=1000)
-            # Menghitung shift jika harga kena Buy Max user
             mc_shift = run_monte_carlo(row["Ticker"], days=30, sims=1000, start_price=row["Buy Max"])
             
             if mc and mc_shift:
                 prob_summary += f"""
                 SAHAM: {row['Stock']}
-                - Harga Sekarang: {format_rupiah(row['Current Price'])}
-                - Avg Price User: {format_rupiah(row['Avg Price'])}
+                - Current Price: {format_rupiah(row['Current Price'])}
+                - Avg Price: {format_rupiah(row['Avg Price'])}
                 - Target Beli (Buy Max): {format_rupiah(row['Buy Max'])}
-                - Monte Carlo Range (90% - 10%): {format_rupiah(mc['p90'])} sampai {format_rupiah(mc['p10'])}
-                - Most Possible Price: {format_rupiah(mc['p50'])}
-                - Shift Logic: Jika harga kena {format_rupiah(row['Buy Max'])}, maka Most Possible bergeser ke {format_rupiah(mc_shift['p50'])}
+                - Range (90%-10%): {format_rupiah(mc['p90'])} - {format_rupiah(mc['p10'])}
+                - Most Possible: {format_rupiah(mc['p50'])}
+                - Shift Target: {format_rupiah(mc_shift['p50'])}
                 ---
                 """
 
         prompt = f"""
-        Tugas: Analis Portofolio Kuantitatif. Evaluasi saham: BBRI, PTBA, TLKM, BSSR.
+        Evaluasi saham: BBRI, PTBA, TLKM, BSSR secara berurutan.
         
-        DATA SIMULASI:
+        DATA:
         {prob_summary}
-
-        DATA PASAR & FUNDAMENTAL:
-        {f_df.to_string()}
         {df.to_string()}
         
-        WAJIB ANALISIS SETIAP SAHAM DENGAN FORMAT 4 POIN:
-        1. Rentang Harga & Probabilitas: Sajikan rentang harga dari hasil simulasi. Nyatakan harga mana yang paling mungkin terjadi (Most Possible).
-        2. Skenario Pergeseran (Shift): Jelaskan bagaimana rentang harga berubah jika harga menyentuh 'Buy Max' user menggunakan data Shift Logic yang tersedia.
-        3. Prospek 1 Bulan: Berikan insight prospek 1 bulan ke depan berdasarkan teknikal (Signal & MA200) dan sentimen pasar saat ini.
-        4. Posisi Investasi: Analisis apakah posisi saat ini (berdasarkan Avg Price) termasuk Risky, Noise, atau Performing Well.
+        WAJIB ANALISIS PER SAHAM (Format 4 Poin):
+        1. Rentang Harga & Probabilitas: Sajikan rentang 90%-10% dan tegaskan harga 'Most Possible'.
+        2. Skenario Pergeseran (Shift): "Jika harga menyentuh [Buy Max], maka rentang harga paling mungkin akan bergeser ke [Shift Target]."
+        3. Prospek 1 Bulan: Analisis prospek berdasarkan teknikal dan market sentiment.
+        4. Posisi Investasi: Apakah posisi saat ini (Avg Price vs Current) termasuk Risky, Noise, atau Performing Well? Jelaskan alasannya.
         
-        Aturan Tambahan:
-        - BSSR adalah Energy (Coal).
-        - Gunakan bahasa profesional dan tegas.
-        - Dilarang membuat rumus sendiri, gunakan hanya angka dari DATA SIMULASI.
+        Note: BSSR = Energy/Coal. Gunakan bahasa profesional.
         """
         
         try:
             res = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile", 
-                messages=[
-                    {"role": "system", "content": "Anda adalah analis data yang disiplin pada angka simulasi."},
-                    {"role": "user", "content": prompt}
-                ], 
+                messages=[{"role": "system", "content": "Analisis data investasi dengan disiplin."},
+                          {"role": "user", "content": prompt}], 
                 temperature=0.1
             )
             st.markdown(res.choices[0].message.content)
