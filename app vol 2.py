@@ -81,8 +81,9 @@ peer_groups = {
 def get_stock_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="1y")
-        if hist.empty: return 0.0, 0.0, 0.0
+        # Menambah period menjadi 2y untuk memastikan rolling 200 aman
+        hist = stock.history(period="2y")
+        if hist.empty or len(hist) < 30: return 0.0, 0.0, 0.0
         price = hist["Close"].iloc[-1]
         ma200 = hist["Close"].rolling(200).mean().iloc[-1] if len(hist) >= 200 else price
         month_change = ((hist["Close"].iloc[-1] - hist["Close"].iloc[-22]) / hist["Close"].iloc[-22] * 100) if len(hist) >= 22 else 0.0
@@ -169,13 +170,13 @@ st.progress(total_u/total_t if total_t > 0 else 0)
 st.write(f"Capital Used: {format_rupiah(total_u)} | Remaining: {format_rupiah(total_t-total_u)}")
 
 # -------------------------
-# 🔮 MONTE CARLO ENGINE (Core Function)
+# 🔮 MONTE CARLO ENGINE
 # -------------------------
 
 def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
     try:
         h = yf.Ticker(ticker_symbol).history(period="1y")["Close"]
-        if len(h) < 30: return None
+        if h.empty or len(h) < 30: return None
         rets = h.pct_change().dropna()
         v, d = rets.std(), rets.mean() - (0.5 * v**2)
         s_price = start_price if start_price else h.iloc[-1]
@@ -186,7 +187,6 @@ def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
         return {"p90": np.percentile(final, 10), "p50": np.percentile(final, 50), "p10": np.percentile(final, 90), "paths": paths}
     except: return None
 
-# Section 1: Manual Simulation (Visible playground)
 st.divider()
 st.subheader("🔮 Probability & Scenario Engine")
 sim_col1, sim_col2, sim_col3 = st.columns(3)
@@ -209,8 +209,7 @@ if st.button("🚀 Run Probabilistic Discovery"):
         st.info(f"**Scenario Logic:** Jika harga besok menyentuh {format_rupiah(trig_v)}, maka target 'Most Possible' 30 hari bergeser ke **{format_rupiah(res_shift['p50'])}**.")
         st.line_chart(pd.DataFrame(res_base["paths"][:, :50]))
     else:
-        # Menambahkan proteksi error agar tombol tidak terlihat diam / kosong
-        st.error(f"Gagal memuat simulasi untuk {sim_s}. Pastikan koneksi internet stabil atau data historis di Yahoo Finance tersedia minimal 30 hari.")
+        st.error(f"Gagal memuat simulasi untuk {sim_s}. Pastikan koneksi internet stabil.")
 
 # -------------------------
 # EXECUTE BUY / FUNDAMENTALS
@@ -236,63 +235,57 @@ st.subheader("Fundamental Snapshot")
 st.dataframe(f_df)
 
 # -------------------------
-# AI REPORT (PORTFOLIO-WIDE STRATEGIC BRIEF)
+# AI STRATEGIC REPORT (Version 1)
 # -------------------------
 
 st.subheader("AI Portfolio Analyst")
 if st.button("Generate AI Analysis"):
-    with st.spinner("Menjalankan swarm simulation untuk seluruh portofolio..."):
+    with st.spinner("Menganalisis Swarm & Skenario Pergeseran..."):
         prob_summary = ""
-        # Loop melalui SEMUA saham untuk membuat dataset AI lengkap
         for _, row in df.iterrows():
             mc = run_monte_carlo(row["Ticker"], days=30, sims=1000)
-            
-            # Skenario: Menghitung target 'Shift' jika harga menyentuh 'Buy Max' user
-            trigger_p = row["Buy Max"]
-            mc_shift = run_monte_carlo(row["Ticker"], days=30, sims=1000, start_price=trigger_p)
+            # Menghitung shift jika harga kena Buy Max user
+            mc_shift = run_monte_carlo(row["Ticker"], days=30, sims=1000, start_price=row["Buy Max"])
             
             if mc and mc_shift:
                 prob_summary += f"""
                 SAHAM: {row['Stock']}
-                - Harga Saat Ini: {format_rupiah(row['Current Price'])}
+                - Harga Sekarang: {format_rupiah(row['Current Price'])}
                 - Avg Price User: {format_rupiah(row['Avg Price'])}
-                - Target Beli User (Buy Max): {format_rupiah(trigger_p)}
-                - Rentang Harga (Bawah/90% prob): {format_rupiah(mc['p90'])}
-                - Rentang Harga (Atas/10% prob): {format_rupiah(mc['p10'])}
-                - Harga Paling Mungkin (Most Likely/50%): {format_rupiah(mc['p50'])}
-                - Skenario Jika menyentuh {format_rupiah(trigger_p)}, target Paling Mungkin BERGESER menjadi: {format_rupiah(mc_shift['p50'])}
+                - Target Beli (Buy Max): {format_rupiah(row['Buy Max'])}
+                - Monte Carlo Range (90% - 10%): {format_rupiah(mc['p90'])} sampai {format_rupiah(mc['p10'])}
+                - Most Possible Price: {format_rupiah(mc['p50'])}
+                - Shift Logic: Jika harga kena {format_rupiah(row['Buy Max'])}, maka Most Possible bergeser ke {format_rupiah(mc_shift['p50'])}
                 ---
                 """
 
         prompt = f"""
-        Tugas: Analis Portofolio Kuantitatif. Evaluasi setiap saham secara berurutan.
+        Tugas: Analis Portofolio Kuantitatif. Evaluasi saham: BBRI, PTBA, TLKM, BSSR.
         
-        DATA HASIL SIMULASI (Wajib digunakan persis seperti di bawah):
+        DATA SIMULASI:
         {prob_summary}
 
         DATA PASAR & FUNDAMENTAL:
         {f_df.to_string()}
         {df.to_string()}
         
-        INSTRUKSI MUTLAK UNTUK SETIAP SAHAM (BBRI, PTBA, TLKM, BSSR):
-        Berikan analisis terstruktur menggunakan 4 poin persis seperti format ini:
+        WAJIB ANALISIS SETIAP SAHAM DENGAN FORMAT 4 POIN:
+        1. Rentang Harga & Probabilitas: Sajikan rentang harga dari hasil simulasi. Nyatakan harga mana yang paling mungkin terjadi (Most Possible).
+        2. Skenario Pergeseran (Shift): Jelaskan bagaimana rentang harga berubah jika harga menyentuh 'Buy Max' user menggunakan data Shift Logic yang tersedia.
+        3. Prospek 1 Bulan: Berikan insight prospek 1 bulan ke depan berdasarkan teknikal (Signal & MA200) dan sentimen pasar saat ini.
+        4. Posisi Investasi: Analisis apakah posisi saat ini (berdasarkan Avg Price) termasuk Risky, Noise, atau Performing Well.
         
-        SAHAM: [Nama Saham]
-        1. Rentang Harga & Probabilitas: Sebutkan rentang harga (Bottom Range hingga Top Range). Tegaskan harga mana yang paling mungkin terjadi (Most Likely) dari rentang tersebut.
-        2. Skenario Pergeseran (Shift): Tuliskan persis seperti ini: "Jika harga menyentuh [Target Beli/Buy Max], maka rentang harga paling mungkin di bulan depan akan bergeser menjadi [Shift p50 dari data]."
-        3. Prospek 1 Bulan Kedepan: Berikan insight prospek 1 bulan ke depan mempertimbangkan teknikal (Signal & MA200) dan sentimen fundamental.
-        4. Posisi Investasi Saat Ini: Analisis berdasarkan Avg Price berbanding Current Price. Jawab secara lugas apakah posisi ini berisiko (risky), hanya fluktuasi sementara (noise), atau sedang berkinerja sangat baik (performing well).
-        
-        ATURAN TAMBAHAN:
-        - BSSR adalah saham COAL MINING (Energy).
-        - DILARANG menghitung atau menebak rumus matematis sendiri. Wajib menggunakan data yang disediakan.
+        Aturan Tambahan:
+        - BSSR adalah Energy (Coal).
+        - Gunakan bahasa profesional dan tegas.
+        - Dilarang membuat rumus sendiri, gunakan hanya angka dari DATA SIMULASI.
         """
         
         try:
             res = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile", 
                 messages=[
-                    {"role": "system", "content": "Anda adalah mesin pembaca data yang disiplin. Jawab setiap poin dengan data mentah yang diberikan tanpa berasumsi."},
+                    {"role": "system", "content": "Anda adalah analis data yang disiplin pada angka simulasi."},
                     {"role": "user", "content": prompt}
                 ], 
                 temperature=0.1
