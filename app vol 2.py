@@ -7,21 +7,15 @@ import datetime
 from groq import Groq
 import traceback
 
-st.set_page_config(page_title="Investment Card Monitor", layout="wide")
-
-# -------------------------
-# FORMAT RUPIAH
-# -------------------------
+# --- INITIAL CONFIG ---
+st.set_page_config(page_title="Investment Card Monitor v2.2", layout="wide")
 
 def format_rupiah(value):
     if pd.isna(value) or value == 0:
         return "-"
     return f"Rp {value:,.0f}".replace(",", ".")
 
-# -------------------------
-# PASSWORD PROTECTION
-# -------------------------
-
+# --- AUTHENTICATION ---
 def check_password():
     if "password_correct" not in st.session_state:
         password = st.text_input("Enter password", type="password")
@@ -35,33 +29,13 @@ def check_password():
 
 check_password()
 
-# -------------------------
-# SUPABASE & GROQ SETUP
-# -------------------------
-
+# --- API CLIENTS ---
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
 supabase = create_client(url, key)
 groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# -------------------------
-# REFRESH LOGIC
-# -------------------------
-
-col1, col2 = st.columns([6,1])
-with col1:
-    st.title("Investment Card Monitor")
-with col2:
-    if st.button("🔄 Refresh"):
-        st.cache_data.clear()
-        st.rerun()
-
-st.caption(f"Last update: {datetime.datetime.now().strftime('%H:%M:%S')}")
-
-# -------------------------
-# AUDIT & DATA FUNCTIONS
-# -------------------------
-
+# --- DATA FETCHING FUNCTIONS ---
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
     try:
@@ -74,22 +48,20 @@ def get_fundamentals(ticker):
             "ROE": ti.get("returnOnEquity"), 
             "Yield": ti.get("dividendYield")
         }
-    except Exception as e:
-        return {"Ticker": ticker, "Sector": "Error Fetching", "Error_Detail": str(e)}
+    except:
+        return {"Ticker": ticker, "Sector": "Error"}
 
 @st.cache_data(ttl=300)
 def get_stock_data(ticker):
     try:
         stock = yf.Ticker(ticker)
         hist = stock.history(period="2y")
-        if hist.empty:
-            return 0.0, 0.0, 0.0
+        if hist.empty: return 0.0, 0.0, 0.0
         price = hist["Close"].iloc[-1]
         ma200 = hist["Close"].rolling(200).mean().iloc[-1] if len(hist) >= 200 else price
         month_change = ((hist["Close"].iloc[-1] - hist["Close"].iloc[-22]) / hist["Close"].iloc[-22] * 100) if len(hist) >= 22 else 0.0
         return price, ma200, month_change
-    except Exception as e:
-        return 0.0, 0.0, 0.0
+    except: return 0.0, 0.0, 0.0
 
 def get_peer_performance(peers):
     perf = []
@@ -97,17 +69,12 @@ def get_peer_performance(peers):
         try:
             hist = yf.Ticker(p).history(period="1mo")
             if not hist.empty:
-                close_prices = hist["Close"]
-                change = ((close_prices.iloc[-1] - close_prices.iloc[0]) / close_prices.iloc[0] * 100)
-                perf.append(change)
-        except:
-            continue
+                c = hist["Close"]
+                perf.append(((c.iloc[-1] - c.iloc[0]) / c.iloc[0] * 100))
+        except: continue
     return sum(perf)/len(perf) if perf else 0
 
-# -------------------------
-# INVESTMENT PLAN & DATA
-# -------------------------
-
+# --- PORTFOLIO DEFINITION ---
 portfolio = {
     "Ticker": ["BBRI.JK", "PTBA.JK", "TLKM.JK", "BSSR.JK"],
     "Stock": ["BBRI", "PTBA", "TLKM", "BSSR"],
@@ -116,202 +83,153 @@ portfolio = {
     "Target Capital": [11880000, 3600000, 6080000, 5400000]
 }
 df = pd.DataFrame(portfolio)
+peer_groups = {"BBRI.JK": ["BMRI.JK","BBCA.JK"], "PTBA.JK": ["ADRO.JK","ITMG.JK"], "TLKM.JK": ["EXCL.JK","ISAT.JK"], "BSSR.JK": ["ADRO.JK","ITMG.JK"]}
 
-peer_groups = {
-    "BBRI.JK": ["BMRI.JK","BBCA.JK"],
-    "PTBA.JK": ["ADRO.JK","ITMG.JK"],
-    "TLKM.JK": ["EXCL.JK","ISAT.JK"],
-    "BSSR.JK": ["ADRO.JK","ITMG.JK"]
-}
+# --- MAIN APP UI ---
+col1, col2 = st.columns([6,1])
+with col1:
+    st.title("Investment Card Monitor")
+with col2:
+    if st.button("🔄 Refresh"):
+        st.cache_data.clear()
+        st.rerun()
 
-# Process Market Signals
-prices, ma200_list, distance_list, ma_signal_list, peer_perf, stock_perf = [], [], [], [], [], []
-for ticker in df["Ticker"]:
-    p, m, c = get_stock_data(ticker)
+# Processing Market Data
+prices, ma200_l, sig_l, peer_l = [], [], [], []
+for t in df["Ticker"]:
+    p, m, c = get_stock_data(t)
     dist = ((p - m) / m * 100) if m != 0 else 0.0
-    peer_c = get_peer_performance(peer_groups.get(ticker,[]))
-    sig = "OVEREXTENDED" if dist > 15 else "WAIT" if dist > 8 else "WATCH" if dist > 2 else "BUY" if dist > -3 else "STRONG BUY"
-    prices.append(p); ma200_list.append(m); distance_list.append(dist); ma_signal_list.append(sig); peer_perf.append(peer_c); stock_perf.append(c)
+    pc = get_peer_performance(peer_groups.get(t,[]))
+    s = "OVEREXTENDED" if dist > 15 else "WAIT" if dist > 8 else "WATCH" if dist > 2 else "BUY" if dist > -3 else "STRONG BUY"
+    prices.append(p); ma200_l.append(m); sig_l.append(s); peer_l.append(pc)
 
-df["Current Price"], df["MA200"], df["MA200 Distance %"], df["MA Signal"], df["Peer 1M %"], df["Stock 1M %"] = prices, ma200_list, distance_list, ma_signal_list, peer_perf, stock_perf
+df["Current Price"], df["MA200"], df["MA Signal"], df["Peer 1M %"] = prices, ma200_l, sig_l, peer_l
+df["Decision"] = df.apply(lambda r: "BUY ZONE" if r["Current Price"] <= r["Buy Max"] and r["Current Price"] >= r["Buy Min"] else ("STRONG BUY" if r["Current Price"] < r["Buy Min"] else "WAIT"), axis=1)
 
-# Logic: Decision & Signal
-def decision(row):
-    if row["Current Price"] <= row["Buy Max"] and row["Current Price"] >= row["Buy Min"]: return "BUY ZONE"
-    return "STRONG BUY" if row["Current Price"] < row["Buy Min"] else "WAIT"
-df["Decision"] = df.apply(decision, axis=1)
-
-def ai_signal(row):
-    if row["Decision"]=="BUY ZONE" and row["MA Signal"] in ["BUY","STRONG BUY"]: return "BUY"
-    if row["Decision"]=="WAIT" and row["Peer 1M %"]>0: return "WATCH"
-    return "WAIT"
-df["AI Buy Signal"] = df.apply(ai_signal, axis=1)
-
-# Transactions Logic
+# Transactions Sync
 try:
-    res = supabase.table("transactions").select("*").execute()
-    transactions = pd.DataFrame(res.data)
-except: transactions = pd.DataFrame()
+    tx_data = supabase.table("transactions").select("*").execute().data
+    tx = pd.DataFrame(tx_data)
+    if not tx.empty:
+        ap = tx.groupby("ticker").apply(lambda x:(x["shares"]*x["price"]).sum()/x["shares"].sum()).reset_index(name="Avg Price")
+        df = df.merge(ap, how="left", left_on="Stock", right_on="ticker").fillna(0)
+    else: df["Avg Price"] = 0
+except: df["Avg Price"] = 0
 
-if not transactions.empty:
-    avg_p = transactions.groupby("ticker").apply(lambda x:(x["shares"]*x["price"]).sum()/x["shares"].sum()).reset_index(name="Avg Price")
-    df = df.merge(avg_p, how="left", left_on="Stock", right_on="ticker")
-    summ = transactions.groupby("ticker")["capital_used"].sum().reset_index()
-    df = df.merge(summ, how="left", left_on="Stock", right_on="ticker")
-else:
-    df["Avg Price"], df["capital_used"] = 0, 0
+df["Gain/Loss %"] = df.apply(lambda r: ((r["Current Price"] - r["Avg Price"]) / r["Avg Price"] * 100) if r["Avg Price"] != 0 else 0, axis=1)
 
-df["capital_used"] = df["capital_used"].fillna(0)
-df["Avg Price"] = df["Avg Price"].fillna(0)
-df["Remaining Capital"] = df["Target Capital"] - df["capital_used"]
-df["Gain/Loss %"] = df.apply(lambda row: ((row["Current Price"] - row["Avg Price"]) / row["Avg Price"] * 100) if row["Avg Price"] != 0 else 0, axis=1).fillna(0)
-
-# -------------------------
-# DISPLAY TABLES
-# -------------------------
-
+# Display Metrics Table
 st.subheader("Market Signals")
-m_disp = df.copy()
-for c in ["Current Price", "Buy Min", "Buy Max", "MA200"]: m_disp[c] = m_disp[c].apply(format_rupiah)
-st.dataframe(m_disp[["Stock","Current Price","Buy Min","Buy Max","MA Signal","Decision","AI Buy Signal"]])
+st.dataframe(df[["Stock","Current Price","Buy Min","Buy Max","MA Signal","Decision","Avg Price","Gain/Loss %"]])
 
-st.subheader("Portfolio Performance")
-p_disp = df.copy()
-for c in ["Avg Price", "Current Price"]: p_disp[c] = p_disp[c].apply(format_rupiah)
-st.dataframe(p_disp[["Stock","Avg Price","Current Price","Gain/Loss %"]])
-
-# -------------------------
-# 🔮 MONTE CARLO ENGINE (Target Aware)
-# -------------------------
-
+# --- MONTE CARLO PATTERN EXTRACTION ENGINE ---
 def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None, target_price=None):
     try:
         h = yf.download(ticker_symbol, period="1y", progress=False, multi_level_index=False)["Close"]
-        if h.empty or len(h) < 30: return None
-        
+        if h.empty: return None
         rets = h.pct_change().dropna()
-        v = rets.std()
-        d = rets.mean() - (0.5 * v**2)
-        s_price = start_price if start_price else h.iloc[-1]
+        v, d = rets.std(), rets.mean() - (0.5 * rets.std()**2)
+        s_p = start_price if start_price else h.iloc[-1]
         
         growth = np.exp(d + v * np.random.normal(0, 1, (int(days), sims)))
-        paths = np.zeros_like(growth)
-        paths[0] = s_price
-        for t in range(1, int(days)):
-            paths[t] = paths[t-1] * growth[t]
-            
-        # Analysis logic
-        final_prices = paths[-1]
-        results = {
-            "p90": np.percentile(final_prices, 10), 
-            "p50": np.percentile(final_prices, 50), 
-            "p10": np.percentile(final_prices, 90), 
-            "paths": paths
-        }
-
-        # Filtering logic for target
+        paths = np.zeros_like(growth); paths[0] = s_p
+        for t in range(1, int(days)): paths[t] = paths[t-1] * growth[t]
+        
+        res = {"p50": np.percentile(paths[-1], 50), "paths": paths}
         if target_price:
-            # Check if target is above or below current price to determine "touch" logic
-            if target_price > s_price:
-                hit_mask = np.any(paths >= target_price, axis=0)
-            else:
-                hit_mask = np.any(paths <= target_price, axis=0)
-            
-            results["hit_paths"] = paths[:, hit_mask]
-            results["miss_paths"] = paths[:, ~hit_mask]
-            results["hit_count"] = np.sum(hit_mask)
-            results["hit_prob"] = (np.sum(hit_mask) / sims) * 100
-            
-        return results
+            mask = np.any(paths >= target_price, axis=0) if target_price > s_p else np.any(paths <= target_price, axis=0)
+            res["hit_prob"], res["hit_mask"] = (np.sum(mask)/sims)*100, mask
+        return res
     except Exception as e:
-        st.error(f"Audit Detail for {ticker_symbol}: {str(e)}")
+        st.error(f"MC Error: {e}")
         return None
 
-# Section: Probability & Scenario Engine
 st.divider()
-st.subheader("🔮 Probability & Scenario Engine")
-sim_col1, sim_col2, sim_col3 = st.columns(3)
-with sim_col1: sim_s = st.selectbox("Stock for Analysis", df["Stock"])
-with sim_col2: sim_d = st.number_input("Days ahead", min_value=1, value=30)
-with sim_col3: 
-    row_match = df[df["Stock"] == sim_s]
-    curr_v = float(row_match["Current Price"].iloc[0]) if not row_match.empty else 0.0
-    trig_v = st.number_input("Price Target to Touch", value=curr_v)
+st.subheader("🔮 Black Swan & Pattern Recognition Engine")
 
-if st.button("🚀 Run Target Analysis"):
+c1, c2, c3 = st.columns(3)
+with c1: sim_s = st.selectbox("Stock to Analyze", df["Stock"])
+with c2: sim_d = st.number_input("Days to Simulate", min_value=1, value=30)
+with c3: 
+    curr_v = float(df[df["Stock"]==sim_s]["Current Price"].iloc[0])
+    trig_v = st.number_input("Pattern Target Price", value=curr_v)
+
+col_a, col_b = st.columns(2)
+with col_a:
+    sample_limit = st.slider("Visualization Sample Size", 1, 1000, 100)
+with col_b:
+    chosen_indices = st.multiselect("Isolate Specific Line Indices", options=list(range(sample_limit)), default=[0])
+
+if st.button("🚀 Run Pattern Extraction"):
     t_sym = df.loc[df["Stock"] == sim_s, "Ticker"].iloc[0]
-    with st.spinner(f"Analyzing simulations for {sim_s}..."):
+    with st.spinner("Extracting Black Swan and Normal patterns..."):
         res = run_monte_carlo(t_sym, sim_d, target_price=trig_v)
         
         if res:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Most Possible (50%)", format_rupiah(res["p50"]))
-            c2.metric("Probability to Hit Target", f"{res['hit_prob']:.1f}%")
-            c3.metric("Simulations hitting Target", f"{res['hit_count']} paths")
+            paths = res['paths']
+            last_prices = paths[-1]
+            
+            # Extract Key Patterns
+            idx_max = np.argmax(last_prices)
+            idx_min = np.argmin(last_prices)
+            idx_med = np.abs(last_prices - res['p50']).argmin()
+            
+            # Combine Auto with User selection
+            final_selection = list(set([idx_max, idx_min, idx_med] + chosen_indices))
+            pattern_paths = paths[:, final_selection]
+            
+            labels = []
+            for idx in final_selection:
+                if idx == idx_max: labels.append(f"Line {idx} (MAX/MOON)")
+                elif idx == idx_min: labels.append(f"Line {idx} (MIN/CRASH)")
+                elif idx == idx_med: labels.append(f"Line {idx} (MEDIAN)")
+                else: labels.append(f"Line {idx} (USER SELECTION)")
 
-            tab1, tab2 = st.tabs(["🎯 Paths hitting Target", "📉 All Simulation Paths"])
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Prob. to Hit Target", f"{res['hit_prob']:.1f}%")
+            m2.metric("P50 (Most Likely)", format_rupiah(res["p50"]))
+            m3.metric("Sample Hits", f"{np.sum(res['hit_mask'][:sample_limit])} / {sample_limit}")
+
+            tab1, tab2 = st.tabs(["🎯 Pattern Analysis (Black Swans vs Normal)", "📊 Full Sample Cloud"])
             
             with tab1:
-                if res['hit_count'] > 0:
-                    st.write(f"Showing {min(50, res['hit_count'])} simulations that touched {format_rupiah(trig_v)}")
-                    st.line_chart(pd.DataFrame(res['hit_paths'][:, :50]))
+                st.write(f"Comparing the 'Black Swan' extremes against the 'Median' path for {sim_s}")
+                st.line_chart(pd.DataFrame(pattern_paths, columns=labels))
+                if res['hit_prob'] < 5:
+                    st.warning("Pattern Insight: Statistically, your target is an outlier (Black Swan territory).")
                 else:
-                    st.warning("No simulations touched this price target in the given timeframe.")
-            
+                    st.info("Pattern Insight: Target is within normal historical volatility range.")
+
             with tab2:
-                st.line_chart(pd.DataFrame(res['paths'][:, :50]))
+                st.line_chart(pd.DataFrame(paths[:, :sample_limit]))
 
-# -------------------------
-# FUNDAMENTALS & EXECUTE
-# -------------------------
-
+# --- FUNDAMENTALS & AI ---
+st.divider()
 st.subheader("Fundamental Snapshot")
 f_df = pd.DataFrame([get_fundamentals(t) for t in portfolio["Ticker"]])
 st.dataframe(f_df)
 
-# -------------------------
-# AI REPORT
-# -------------------------
-
-st.subheader("AI Portfolio Analyst")
-if st.button("Generate AI Analysis"):
-    with st.spinner("Generating Strategic Brief..."):
-        prob_summary = ""
-        for _, row in df.iterrows():
-            # AI runs hit analysis against 'Buy Max' as the default target
-            mc = run_monte_carlo(row["Ticker"], days=30, sims=1000, target_price=row["Buy Max"])
-            
-            if mc:
-                prob_summary += f"""
-                SAHAM: {row['Stock']}
-                - Current: {format_rupiah(row['Current Price'])}
-                - Target (Buy Max): {format_rupiah(row['Buy Max'])}
-                - Probabilitas Hit Target: {mc['hit_prob']:.1f}%
-                - Range (90%-10%): {format_rupiah(mc['p90'])} - {format_rupiah(mc['p10'])}
-                - Most Possible: {format_rupiah(mc['p50'])}
-                ---
-                """
-
+st.subheader("AI Strategic Brief")
+if st.button("Generate AI Portfolio Analysis"):
+    with st.spinner("Executing Strategic Analysis..."):
+        summary = ""
+        for _, r in df.iterrows():
+            mc = run_monte_carlo(r["Ticker"], target_price=r["Buy Max"])
+            if mc: summary += f"{r['Stock']}: Hit Prob {mc['hit_prob']:.1f}%, P50 {mc['p50']}\n"
+        
         prompt = f"""
-        Evaluasi strategis untuk BBRI, PTBA, TLKM, BSSR.
+        Role: Senior Quantitative Investment Analyst.
+        Evaluate: BBRI, PTBA, TLKM, BSSR.
+        Data: {summary}
+        Current Status: {df.to_string()}
         
-        DATA SIMULASI:
-        {prob_summary}
-        {df.to_string()}
-        
-        FORMAT ANALISIS (4 Poin):
-        1. Rentang Harga & Probabilitas: Sajikan rentang dan harga 'Most Possible'.
-        2. Skenario Pergeseran (Shift/Hit): Sebutkan probabilitas harga menyentuh 'Buy Max' (Target) dalam 30 hari.
-        3. Prospek 1 Bulan: Insight teknikal dan sentimen.
-        4. Posisi Investasi: Analisis apakah Risky, Noise, atau Performing Well berdasarkan Avg Price.
+        Provide 4-point analysis per stock:
+        1. Range & P50: Statistical expected range.
+        2. Hit Probability: Odds of reaching Buy Max.
+        3. 1-Month Outlook: Technical & Sentiment.
+        4. Portfolio Status: Risky, Noise, or Performing Well based on Avg Price.
         """
-        
         try:
-            res = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile", 
-                messages=[{"role": "user", "content": prompt}], 
-                temperature=0.1
-            )
-            st.markdown(res.choices[0].message.content)
-        except Exception as e:
-            st.error(f"AI Error: {e}")
+            resp = groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role":"user","content":prompt}])
+            st.markdown(resp.choices[0].message.content)
+        except: st.error("AI Analysis failed to generate.")
