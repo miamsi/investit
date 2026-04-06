@@ -169,7 +169,7 @@ st.progress(total_u/total_t if total_t > 0 else 0)
 st.write(f"Capital Used: {format_rupiah(total_u)} | Remaining: {format_rupiah(total_t-total_u)}")
 
 # -------------------------
-# 🔮 MONTE CARLO ENGINE (v1.3)
+# 🔮 MONTE CARLO ENGINE (Core Function)
 # -------------------------
 
 def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
@@ -186,13 +186,12 @@ def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
         return {"p90": np.percentile(final, 10), "p50": np.percentile(final, 50), "p10": np.percentile(final, 90), "paths": paths}
     except: return None
 
+# Section 1: Manual Simulation (Visible playground)
 st.divider()
 st.subheader("🔮 Probability & Scenario Engine")
-st.write("Manual Interactive Simulation. Use this to stress-test specific price targets.")
-
 sim_col1, sim_col2, sim_col3 = st.columns(3)
 with sim_col1: sim_s = st.selectbox("Stock for Analysis", df["Stock"])
-with sim_col2: sim_d = st.number_input("Simulation Horizon (Days)", min_value=1, value=30)
+with sim_col2: sim_d = st.number_input("Days ahead", min_value=1, value=30)
 with sim_col3: 
     curr_v = float(df[df["Stock"] == sim_s]["Current Price"].iloc[0])
     trig_v = st.number_input("What if price hits this tomorrow?", value=curr_v)
@@ -205,12 +204,9 @@ if st.button("🚀 Run Probabilistic Discovery"):
     if res_base:
         c1, c2, c3 = st.columns(3)
         c1.metric("Most Possible (50%)", format_rupiah(res_base["p50"]))
-        c2.metric("Conservative (90%)", format_rupiah(res_base["p90"]), help="90% chance price stays above this")
+        c2.metric("Conservative (90%)", format_rupiah(res_base["p90"]))
         c3.metric("Optimistic (10%)", format_rupiah(res_base["p10"]))
-        
-        st.info(f"**Scenario Logic:** If the price hits **{format_rupiah(trig_v)}** tomorrow, the 'Most Possible' level shifts to **{format_rupiah(res_shift['p50'])}**.")
-        
-        # Display the visual swarm chart
+        st.info(f"**Scenario Logic:** Jika harga besok menyentuh {format_rupiah(trig_v)}, maka target 'Most Possible' 30 hari bergeser ke **{format_rupiah(res_shift['p50'])}**.")
         st.line_chart(pd.DataFrame(res_base["paths"][:, :50]))
 
 # -------------------------
@@ -220,10 +216,10 @@ if st.button("🚀 Run Probabilistic Discovery"):
 st.subheader("Execute Buy")
 t_choice = st.selectbox("Stock", df["Stock"], key="b_t")
 shs = st.number_input("Shares", min_value=1, step=1)
-prc = st.number_input("Execution Price", min_value=1.0)
+prc = st.number_input("Price", min_value=1.0)
 if st.button("Record Trade"):
     supabase.table("transactions").insert({"ticker":t_choice, "shares":shs, "price":prc, "capital_used":shs*prc}).execute()
-    st.success("Trade recorded.")
+    st.success("Trade Recorded")
 
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
@@ -237,38 +233,56 @@ st.subheader("Fundamental Snapshot")
 st.dataframe(f_df)
 
 # -------------------------
-# AI REPORT (INTEGRATED SWARM)
+# AI REPORT (PORTFOLIO-WIDE STRATEGIC BRIEF)
 # -------------------------
 
 st.subheader("AI Portfolio Analyst")
-st.write("The AI will automatically run 1,000 background simulations for each stock before analyzing.")
-
 if st.button("Generate AI Analysis"):
-    with st.spinner("Executing MiroFish background swarm..."):
+    with st.spinner("Menjalankan swarm simulation untuk seluruh portofolio..."):
         prob_summary = ""
+        # Loop melalui SEMUA saham di dataframe untuk AI
         for _, row in df.iterrows():
-            # Background check for each stock
             mc = run_monte_carlo(row["Ticker"], days=30, sims=1000)
             if mc:
-                prob_summary += f"- {row['Stock']}: Current {format_rupiah(row['Current Price'])}, Probable Range {format_rupiah(mc['p90'])} - {format_rupiah(mc['p10'])}, Most Likely {format_rupiah(mc['p50'])}\n"
+                prob_summary += f"""
+                SAHAM: {row['Stock']}
+                - Harga Sekarang: {format_rupiah(row['Current Price'])}
+                - Target Beli Anda (Buy Max): {format_rupiah(row['Buy Max'])}
+                - Hasil Simulasi (Median 50%): {format_rupiah(mc['p50'])}
+                - Hasil Simulasi (Bottom 90%): {format_rupiah(mc['p90'])}
+                - Hasil Simulasi (Top 10%): {format_rupiah(mc['p10'])}
+                ---
+                """
 
         prompt = f"""
-        Kamu adalah Analis Saham Indonesia dengan logika 'MiroFish' (Probabilistic Analysis).
+        Tugas: Analis Portofolio Kuantitatif. Berikan "Strategic Brief" untuk SEMUA saham di bawah ini.
         
-        DATA SWARM (Probabilitas 30 Hari):
+        DATA HASIL SIMULASI (Wajib digunakan):
         {prob_summary}
 
-        FUNDAMENTALS:
+        DATA PASAR & FUNDAMENTAL:
         {f_df.to_string()}
-
-        MARKET SIGNALS:
         {df.to_string()}
         
-        TUGAS KHUSUS:
-        1. BSSR adalah COAL MINING (Energy).
-        2. Bandingkan 'Buy Max' user dengan 'Probable Range' dari Monte Carlo.
-        3. Jika 'Buy Max' user berada di bawah 'Bottom Range (90% prob)', beri tahu user bahwa target harganya terlalu rendah dan mungkin tidak akan tercapai (order tidak akan fill).
-        4. Berikan saran 'Realistic Entry' berdasarkan angka Most Likely.
+        INSTRUKSI KHUSUS:
+        1. Jangan hanya bahas BSSR. Berikan analisis singkat untuk BBRI, PTBA, TLKM, dan BSSR secara berurutan.
+        2. Gunakan Logika MiroFish: Bandingkan 'Buy Max' user dengan 'Bottom 90%' simulasi.
+        3. Jika 'Buy Max' berada jauh di bawah 'Bottom 90%', beri peringatan bahwa antrian beli mungkin tidak akan pernah tereksekusi. Berikan harga 'Realistic Entry'.
+        4. BSSR adalah COAL MINING.
+        5. Gunakan Bahasa Indonesia profesional dengan format poin-poin agar mudah dibaca.
+        6. DILARANG membuat rumus matematika sendiri. Gunakan angka simulasi yang sudah disediakan.
         """
-        res = groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role":"user","content":prompt}], temperature=0.3)
-        st.markdown(res.choices[0].message.content)
+        
+        try:
+            # Menggunakan temperature 0.1 agar AI tetap disiplin pada data
+            res = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile", 
+                messages=[
+                    {"role": "system", "content": "Anda adalah analis portofolio yang memberikan ringkasan untuk setiap saham dalam list. Dilarang berhalusinasi rumus."},
+                    {"role": "user", "content": prompt}
+                ], 
+                temperature=0.1
+            )
+            st.markdown(res.choices[0].message.content)
+        except Exception as e:
+            st.error(f"AI Error: {e}")
