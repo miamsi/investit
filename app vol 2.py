@@ -5,6 +5,7 @@ import numpy as np
 from supabase import create_client
 import datetime
 from groq import Groq
+import traceback
 
 st.set_page_config(page_title="Investment Card Monitor", layout="wide")
 
@@ -58,6 +59,55 @@ with col2:
 st.caption(f"Last update: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
 # -------------------------
+# AUDIT & DATA FUNCTIONS
+# -------------------------
+
+@st.cache_data(ttl=3600)
+def get_fundamentals(ticker):
+    try:
+        ti = yf.Ticker(ticker).info
+        return {
+            "Ticker": ticker, 
+            "Sector": ti.get("sector", "Unknown"), 
+            "PE": ti.get("trailingPE"), 
+            "PB": ti.get("priceToBook"), 
+            "ROE": ti.get("returnOnEquity"), 
+            "Yield": ti.get("dividendYield")
+        }
+    except Exception as e:
+        return {"Ticker": ticker, "Sector": "Error Fetching", "Error_Detail": str(e)}
+
+@st.cache_data(ttl=300)
+def get_stock_data(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="2y")
+        if hist.empty:
+            return 0.0, 0.0, 0.0
+        price = hist["Close"].iloc[-1]
+        ma200 = hist["Close"].rolling(200).mean().iloc[-1] if len(hist) >= 200 else price
+        month_change = ((hist["Close"].iloc[-1] - hist["Close"].iloc[-22]) / hist["Close"].iloc[-22] * 100) if len(hist) >= 22 else 0.0
+        return price, ma200, month_change
+    except Exception as e:
+        # Audit Script: Print error to console/log
+        print(f"Audit Error [get_stock_data] for {ticker}: {str(e)}")
+        return 0.0, 0.0, 0.0
+
+def get_peer_performance(peers):
+    perf = []
+    for p in peers:
+        try:
+            hist = yf.Ticker(p).history(period="1mo")
+            if not hist.empty:
+                # Handle potential multi-index from recent yfinance versions
+                close_prices = hist["Close"]
+                change = ((close_prices.iloc[-1] - close_prices.iloc[0]) / close_prices.iloc[0] * 100)
+                perf.append(change)
+        except:
+            continue
+    return sum(perf)/len(perf) if perf else 0
+
+# -------------------------
 # INVESTMENT PLAN & DATA
 # -------------------------
 
@@ -77,29 +127,7 @@ peer_groups = {
     "BSSR.JK": ["ADRO.JK","ITMG.JK"]
 }
 
-@st.cache_data(ttl=300)
-def get_stock_data(ticker):
-    try:
-        stock = yf.Ticker(ticker)
-        # Menarik data 2 tahun untuk stabilitas MA200
-        hist = stock.history(period="2y")
-        if hist.empty or len(hist) < 30: return 0.0, 0.0, 0.0
-        price = hist["Close"].iloc[-1]
-        ma200 = hist["Close"].rolling(200).mean().iloc[-1] if len(hist) >= 200 else price
-        month_change = ((hist["Close"].iloc[-1] - hist["Close"].iloc[-22]) / hist["Close"].iloc[-22] * 100) if len(hist) >= 22 else 0.0
-        return price, ma200, month_change
-    except: return 0.0, 0.0, 0.0
-
-def get_peer_performance(peers):
-    perf = []
-    for p in peers:
-        try:
-            hist = yf.Ticker(p).history(period="1mo")
-            if not hist.empty: perf.append(((hist["Close"].iloc[-1] - hist["Close"].iloc[0]) / hist["Close"].iloc[0] * 100))
-        except: continue
-    return sum(perf)/len(perf) if perf else 0
-
-# Market Signal Processing
+# Process Market Signals
 prices, ma200_list, distance_list, ma_signal_list, peer_perf, stock_perf = [], [], [], [], [], []
 for ticker in df["Ticker"]:
     p, m, c = get_stock_data(ticker)
@@ -170,22 +198,22 @@ st.progress(total_u/total_t if total_t > 0 else 0)
 st.write(f"Capital Used: {format_rupiah(total_u)} | Remaining: {format_rupiah(total_t-total_u)}")
 
 # -------------------------
-# 🔮 MONTE CARLO ENGINE
+# 🔮 MONTE CARLO ENGINE (Core Function)
 # -------------------------
 
 def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
     try:
-        # Menarik data 1 tahun untuk menghitung volatilitas harian
-        h = yf.download(ticker_symbol, period="1y", progress=False)["Close"]
-        if h.empty or len(h) < 30: return None
+        # Audit: Track fetching start
+        h = yf.download(ticker_symbol, period="1y", progress=False, multi_level_index=False)["Close"]
+        
+        if h.empty or len(h) < 30:
+            return None
         
         rets = h.pct_change().dropna()
         v = rets.std()
         d = rets.mean() - (0.5 * v**2)
-        
         s_price = start_price if start_price else h.iloc[-1]
         
-        # Simulasi jalur harga
         growth = np.exp(d + v * np.random.normal(0, 1, (int(days), sims)))
         paths = np.zeros_like(growth)
         paths[0] = s_price
@@ -199,21 +227,25 @@ def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
             "paths": paths
         }
     except Exception as e:
+        # Audit Script: Detailed error reporting for Monte Carlo
+        st.error(f"Audit Detail for {ticker_symbol}: {str(e)}")
+        print(traceback.format_exc())
         return None
 
+# Section 1: Manual Simulation (Visible playground)
 st.divider()
 st.subheader("🔮 Probability & Scenario Engine")
 sim_col1, sim_col2, sim_col3 = st.columns(3)
 with sim_col1: sim_s = st.selectbox("Stock for Analysis", df["Stock"])
 with sim_col2: sim_d = st.number_input("Days ahead", min_value=1, value=30)
 with sim_col3: 
-    curr_row = df[df["Stock"] == sim_s]
-    curr_v = float(curr_row["Current Price"].iloc[0]) if not curr_row.empty else 0.0
+    row_match = df[df["Stock"] == sim_s]
+    curr_v = float(row_match["Current Price"].iloc[0]) if not row_match.empty else 0.0
     trig_v = st.number_input("What if price hits this tomorrow?", value=curr_v)
 
 if st.button("🚀 Run Probabilistic Discovery"):
     t_sym = df.loc[df["Stock"] == sim_s, "Ticker"].iloc[0]
-    with st.spinner(f"Simulating {sim_s}..."):
+    with st.spinner(f"Auditing Data & Running Simulation for {sim_s}..."):
         res_base = run_monte_carlo(t_sym, sim_d)
         res_shift = run_monte_carlo(t_sym, sim_d, start_price=trig_v)
         
@@ -222,14 +254,16 @@ if st.button("🚀 Run Probabilistic Discovery"):
             c1.metric("Most Possible (50%)", format_rupiah(res_base["p50"]))
             c2.metric("Conservative (90%)", format_rupiah(res_base["p90"]))
             c3.metric("Optimistic (10%)", format_rupiah(res_base["p10"]))
-            st.info(f"**Scenario Logic:** Jika harga menyentuh {format_rupiah(trig_v)}, maka target 'Most Possible' 30 hari bergeser ke **{format_rupiah(res_shift['p50'])}**.")
+            st.info(f"**Scenario Logic:** Jika harga besok menyentuh {format_rupiah(trig_v)}, maka target 'Most Possible' 30 hari bergeser ke **{format_rupiah(res_shift['p50'])}**.")
             st.line_chart(pd.DataFrame(res_base["paths"][:, :50]))
-        else:
-            st.error(f"Gagal memuat data historis untuk {sim_s}. Coba lagi dalam beberapa saat.")
 
 # -------------------------
-# EXECUTE BUY / FUNDAMENTALS
+# FUNDAMENTALS & EXECUTE
 # -------------------------
+
+st.subheader("Fundamental Snapshot")
+f_df = pd.DataFrame([get_fundamentals(t) for t in portfolio["Ticker"]])
+st.dataframe(f_df)
 
 st.subheader("Execute Buy")
 t_choice = st.selectbox("Stock", df["Stock"], key="b_t")
@@ -239,17 +273,13 @@ if st.button("Record Trade"):
     supabase.table("transactions").insert({"ticker":t_choice, "shares":shs, "price":prc, "capital_used":shs*prc}).execute()
     st.success("Trade Recorded")
 
-f_df = pd.DataFrame([get_fundamentals(t) for t in portfolio["Ticker"]])
-st.subheader("Fundamental Snapshot")
-st.dataframe(f_df)
-
 # -------------------------
-# AI STRATEGIC REPORT
+# AI REPORT (PORTFOLIO-WIDE STRATEGIC BRIEF)
 # -------------------------
 
 st.subheader("AI Portfolio Analyst")
 if st.button("Generate AI Analysis"):
-    with st.spinner("Menganalisis Swarm & Skenario Pergeseran..."):
+    with st.spinner("Executing background swarm and generating 4-point analysis..."):
         prob_summary = ""
         for _, row in df.iterrows():
             mc = run_monte_carlo(row["Ticker"], days=30, sims=1000)
@@ -258,35 +288,38 @@ if st.button("Generate AI Analysis"):
             if mc and mc_shift:
                 prob_summary += f"""
                 SAHAM: {row['Stock']}
-                - Current Price: {format_rupiah(row['Current Price'])}
-                - Avg Price: {format_rupiah(row['Avg Price'])}
+                - Harga Sekarang: {format_rupiah(row['Current Price'])}
+                - Avg Price User: {format_rupiah(row['Avg Price'])}
                 - Target Beli (Buy Max): {format_rupiah(row['Buy Max'])}
                 - Range (90%-10%): {format_rupiah(mc['p90'])} - {format_rupiah(mc['p10'])}
                 - Most Possible: {format_rupiah(mc['p50'])}
-                - Shift Target: {format_rupiah(mc_shift['p50'])}
+                - Shift Logic (Jika kena Buy Max): {format_rupiah(mc_shift['p50'])}
                 ---
                 """
 
         prompt = f"""
-        Evaluasi saham: BBRI, PTBA, TLKM, BSSR secara berurutan.
+        Tugas: Senior Quant Analyst. Berikan evaluasi strategis untuk BBRI, PTBA, TLKM, BSSR secara berurutan.
         
-        DATA:
+        DATA SIMULASI:
         {prob_summary}
+
+        DATA MARKET & FUNDAMENTAL:
+        {f_df.to_string()}
         {df.to_string()}
         
-        WAJIB ANALISIS PER SAHAM (Format 4 Poin):
-        1. Rentang Harga & Probabilitas: Sajikan rentang 90%-10% dan tegaskan harga 'Most Possible'.
-        2. Skenario Pergeseran (Shift): "Jika harga menyentuh [Buy Max], maka rentang harga paling mungkin akan bergeser ke [Shift Target]."
-        3. Prospek 1 Bulan: Analisis prospek berdasarkan teknikal dan market sentiment.
-        4. Posisi Investasi: Apakah posisi saat ini (Avg Price vs Current) termasuk Risky, Noise, atau Performing Well? Jelaskan alasannya.
+        WAJIB ANALISIS SETIAP SAHAM DENGAN FORMAT 4 POIN:
+        1. Rentang Harga & Probabilitas: Sajikan rentang harga (Bottom 90% ke Top 10%). Tegaskan harga mana yang 'Most Possible'.
+        2. Skenario Pergeseran (Shift): Jelaskan bagaimana rentang harga berubah jika harga menyentuh 'Buy Max' user menggunakan data 'Shift Logic'.
+        3. Prospek 1 Bulan: Berikan insight prospek 1 bulan kedepan berdasarkan teknikal (MA200) dan sentimen pasar.
+        4. Posisi Investasi: Analisis apakah posisi saat ini (berdasarkan Avg Price) termasuk Risky, Noise, atau Performing Well. Berikan alasan lugas.
         
-        Note: BSSR = Energy/Coal. Gunakan bahasa profesional.
+        Note: BSSR adalah Coal Mining. Dilarang menebak rumus. Gunakan data simulasi yang diberikan.
         """
         
         try:
             res = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile", 
-                messages=[{"role": "system", "content": "Analisis data investasi dengan disiplin."},
+                messages=[{"role": "system", "content": "Anda adalah analis investasi data-driven yang hanya berbicara berdasarkan data statistik yang disediakan."},
                           {"role": "user", "content": prompt}], 
                 temperature=0.1
             )
