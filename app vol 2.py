@@ -89,8 +89,6 @@ def get_stock_data(ticker):
         month_change = ((hist["Close"].iloc[-1] - hist["Close"].iloc[-22]) / hist["Close"].iloc[-22] * 100) if len(hist) >= 22 else 0.0
         return price, ma200, month_change
     except Exception as e:
-        # Audit Script: Print error to console/log
-        print(f"Audit Error [get_stock_data] for {ticker}: {str(e)}")
         return 0.0, 0.0, 0.0
 
 def get_peer_performance(peers):
@@ -99,7 +97,6 @@ def get_peer_performance(peers):
         try:
             hist = yf.Ticker(p).history(period="1mo")
             if not hist.empty:
-                # Handle potential multi-index from recent yfinance versions
                 close_prices = hist["Close"]
                 change = ((close_prices.iloc[-1] - close_prices.iloc[0]) / close_prices.iloc[0] * 100)
                 perf.append(change)
@@ -150,15 +147,6 @@ def ai_signal(row):
     return "WAIT"
 df["AI Buy Signal"] = df.apply(ai_signal, axis=1)
 
-def interpret(row):
-    m, a = row["Decision"], row["AI Buy Signal"]
-    if m=="BUY ZONE" and a=="BUY": return "Ideal entry. Price inside buy range and momentum healthy."
-    if m=="WAIT" and a=="WATCH": return "Sector momentum positive but price above buy zone."
-    if m=="STRONG BUY" and a=="WAIT": return "Cheap but sector weak. Risk of falling knife."
-    if m=="BUY ZONE" and a=="WAIT": return "Buy zone reached but momentum slightly overextended."
-    return "Neutral condition."
-df["AI Interpretation"] = df.apply(interpret, axis=1)
-
 # Transactions Logic
 try:
     res = supabase.table("transactions").select("*").execute()
@@ -185,29 +173,21 @@ df["Gain/Loss %"] = df.apply(lambda row: ((row["Current Price"] - row["Avg Price
 st.subheader("Market Signals")
 m_disp = df.copy()
 for c in ["Current Price", "Buy Min", "Buy Max", "MA200"]: m_disp[c] = m_disp[c].apply(format_rupiah)
-st.dataframe(m_disp[["Stock","Current Price","Buy Min","Buy Max","MA200","MA200 Distance %","MA Signal","Decision","AI Buy Signal","AI Interpretation"]])
+st.dataframe(m_disp[["Stock","Current Price","Buy Min","Buy Max","MA Signal","Decision","AI Buy Signal"]])
 
 st.subheader("Portfolio Performance")
 p_disp = df.copy()
 for c in ["Avg Price", "Current Price"]: p_disp[c] = p_disp[c].apply(format_rupiah)
 st.dataframe(p_disp[["Stock","Avg Price","Current Price","Gain/Loss %"]])
 
-st.subheader("Portfolio Deployment")
-total_t, total_u = df["Target Capital"].sum(), df["capital_used"].sum()
-st.progress(total_u/total_t if total_t > 0 else 0)
-st.write(f"Capital Used: {format_rupiah(total_u)} | Remaining: {format_rupiah(total_t-total_u)}")
-
 # -------------------------
-# 🔮 MONTE CARLO ENGINE (Core Function)
+# 🔮 MONTE CARLO ENGINE (Target Aware)
 # -------------------------
 
-def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
+def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None, target_price=None):
     try:
-        # Audit: Track fetching start
         h = yf.download(ticker_symbol, period="1y", progress=False, multi_level_index=False)["Close"]
-        
-        if h.empty or len(h) < 30:
-            return None
+        if h.empty or len(h) < 30: return None
         
         rets = h.pct_change().dropna()
         v = rets.std()
@@ -220,19 +200,34 @@ def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
         for t in range(1, int(days)):
             paths[t] = paths[t-1] * growth[t]
             
-        return {
-            "p90": np.percentile(paths[-1], 10), 
-            "p50": np.percentile(paths[-1], 50), 
-            "p10": np.percentile(paths[-1], 90), 
+        # Analysis logic
+        final_prices = paths[-1]
+        results = {
+            "p90": np.percentile(final_prices, 10), 
+            "p50": np.percentile(final_prices, 50), 
+            "p10": np.percentile(final_prices, 90), 
             "paths": paths
         }
+
+        # Filtering logic for target
+        if target_price:
+            # Check if target is above or below current price to determine "touch" logic
+            if target_price > s_price:
+                hit_mask = np.any(paths >= target_price, axis=0)
+            else:
+                hit_mask = np.any(paths <= target_price, axis=0)
+            
+            results["hit_paths"] = paths[:, hit_mask]
+            results["miss_paths"] = paths[:, ~hit_mask]
+            results["hit_count"] = np.sum(hit_mask)
+            results["hit_prob"] = (np.sum(hit_mask) / sims) * 100
+            
+        return results
     except Exception as e:
-        # Audit Script: Detailed error reporting for Monte Carlo
         st.error(f"Audit Detail for {ticker_symbol}: {str(e)}")
-        print(traceback.format_exc())
         return None
 
-# Section 1: Manual Simulation (Visible playground)
+# Section: Probability & Scenario Engine
 st.divider()
 st.subheader("🔮 Probability & Scenario Engine")
 sim_col1, sim_col2, sim_col3 = st.columns(3)
@@ -241,21 +236,30 @@ with sim_col2: sim_d = st.number_input("Days ahead", min_value=1, value=30)
 with sim_col3: 
     row_match = df[df["Stock"] == sim_s]
     curr_v = float(row_match["Current Price"].iloc[0]) if not row_match.empty else 0.0
-    trig_v = st.number_input("What if price hits this tomorrow?", value=curr_v)
+    trig_v = st.number_input("Price Target to Touch", value=curr_v)
 
-if st.button("🚀 Run Probabilistic Discovery"):
+if st.button("🚀 Run Target Analysis"):
     t_sym = df.loc[df["Stock"] == sim_s, "Ticker"].iloc[0]
-    with st.spinner(f"Auditing Data & Running Simulation for {sim_s}..."):
-        res_base = run_monte_carlo(t_sym, sim_d)
-        res_shift = run_monte_carlo(t_sym, sim_d, start_price=trig_v)
+    with st.spinner(f"Analyzing simulations for {sim_s}..."):
+        res = run_monte_carlo(t_sym, sim_d, target_price=trig_v)
         
-        if res_base:
+        if res:
             c1, c2, c3 = st.columns(3)
-            c1.metric("Most Possible (50%)", format_rupiah(res_base["p50"]))
-            c2.metric("Conservative (90%)", format_rupiah(res_base["p90"]))
-            c3.metric("Optimistic (10%)", format_rupiah(res_base["p10"]))
-            st.info(f"**Scenario Logic:** Jika harga besok menyentuh {format_rupiah(trig_v)}, maka target 'Most Possible' 30 hari bergeser ke **{format_rupiah(res_shift['p50'])}**.")
-            st.line_chart(pd.DataFrame(res_base["paths"][:, :50]))
+            c1.metric("Most Possible (50%)", format_rupiah(res["p50"]))
+            c2.metric("Probability to Hit Target", f"{res['hit_prob']:.1f}%")
+            c3.metric("Simulations hitting Target", f"{res['hit_count']} paths")
+
+            tab1, tab2 = st.tabs(["🎯 Paths hitting Target", "📉 All Simulation Paths"])
+            
+            with tab1:
+                if res['hit_count'] > 0:
+                    st.write(f"Showing {min(50, res['hit_count'])} simulations that touched {format_rupiah(trig_v)}")
+                    st.line_chart(pd.DataFrame(res['hit_paths'][:, :50]))
+                else:
+                    st.warning("No simulations touched this price target in the given timeframe.")
+            
+            with tab2:
+                st.line_chart(pd.DataFrame(res['paths'][:, :50]))
 
 # -------------------------
 # FUNDAMENTALS & EXECUTE
@@ -265,62 +269,47 @@ st.subheader("Fundamental Snapshot")
 f_df = pd.DataFrame([get_fundamentals(t) for t in portfolio["Ticker"]])
 st.dataframe(f_df)
 
-st.subheader("Execute Buy")
-t_choice = st.selectbox("Stock", df["Stock"], key="b_t")
-shs = st.number_input("Shares", min_value=1, step=1)
-prc = st.number_input("Price", min_value=1.0)
-if st.button("Record Trade"):
-    supabase.table("transactions").insert({"ticker":t_choice, "shares":shs, "price":prc, "capital_used":shs*prc}).execute()
-    st.success("Trade Recorded")
-
 # -------------------------
-# AI REPORT (PORTFOLIO-WIDE STRATEGIC BRIEF)
+# AI REPORT
 # -------------------------
 
 st.subheader("AI Portfolio Analyst")
 if st.button("Generate AI Analysis"):
-    with st.spinner("Executing background swarm and generating 4-point analysis..."):
+    with st.spinner("Generating Strategic Brief..."):
         prob_summary = ""
         for _, row in df.iterrows():
-            mc = run_monte_carlo(row["Ticker"], days=30, sims=1000)
-            mc_shift = run_monte_carlo(row["Ticker"], days=30, sims=1000, start_price=row["Buy Max"])
+            # AI runs hit analysis against 'Buy Max' as the default target
+            mc = run_monte_carlo(row["Ticker"], days=30, sims=1000, target_price=row["Buy Max"])
             
-            if mc and mc_shift:
+            if mc:
                 prob_summary += f"""
                 SAHAM: {row['Stock']}
-                - Harga Sekarang: {format_rupiah(row['Current Price'])}
-                - Avg Price User: {format_rupiah(row['Avg Price'])}
-                - Target Beli (Buy Max): {format_rupiah(row['Buy Max'])}
+                - Current: {format_rupiah(row['Current Price'])}
+                - Target (Buy Max): {format_rupiah(row['Buy Max'])}
+                - Probabilitas Hit Target: {mc['hit_prob']:.1f}%
                 - Range (90%-10%): {format_rupiah(mc['p90'])} - {format_rupiah(mc['p10'])}
                 - Most Possible: {format_rupiah(mc['p50'])}
-                - Shift Logic (Jika kena Buy Max): {format_rupiah(mc_shift['p50'])}
                 ---
                 """
 
         prompt = f"""
-        Tugas: Senior Quant Analyst. Berikan evaluasi strategis untuk BBRI, PTBA, TLKM, BSSR secara berurutan.
+        Evaluasi strategis untuk BBRI, PTBA, TLKM, BSSR.
         
         DATA SIMULASI:
         {prob_summary}
-
-        DATA MARKET & FUNDAMENTAL:
-        {f_df.to_string()}
         {df.to_string()}
         
-        WAJIB ANALISIS SETIAP SAHAM DENGAN FORMAT 4 POIN:
-        1. Rentang Harga & Probabilitas: Sajikan rentang harga (Bottom 90% ke Top 10%). Tegaskan harga mana yang 'Most Possible'.
-        2. Skenario Pergeseran (Shift): Jelaskan bagaimana rentang harga berubah jika harga menyentuh 'Buy Max' user menggunakan data 'Shift Logic'.
-        3. Prospek 1 Bulan: Berikan insight prospek 1 bulan kedepan berdasarkan teknikal (MA200) dan sentimen pasar.
-        4. Posisi Investasi: Analisis apakah posisi saat ini (berdasarkan Avg Price) termasuk Risky, Noise, atau Performing Well. Berikan alasan lugas.
-        
-        Note: BSSR adalah Coal Mining. Dilarang menebak rumus. Gunakan data simulasi yang diberikan.
+        FORMAT ANALISIS (4 Poin):
+        1. Rentang Harga & Probabilitas: Sajikan rentang dan harga 'Most Possible'.
+        2. Skenario Pergeseran (Shift/Hit): Sebutkan probabilitas harga menyentuh 'Buy Max' (Target) dalam 30 hari.
+        3. Prospek 1 Bulan: Insight teknikal dan sentimen.
+        4. Posisi Investasi: Analisis apakah Risky, Noise, atau Performing Well berdasarkan Avg Price.
         """
         
         try:
             res = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile", 
-                messages=[{"role": "system", "content": "Anda adalah analis investasi data-driven yang hanya berbicara berdasarkan data statistik yang disediakan."},
-                          {"role": "user", "content": prompt}], 
+                messages=[{"role": "user", "content": prompt}], 
                 temperature=0.1
             )
             st.markdown(res.choices[0].message.content)
