@@ -5,7 +5,6 @@ import numpy as np
 from supabase import create_client
 import datetime
 from groq import Groq
-import traceback
 
 st.set_page_config(page_title="Investment Card Monitor", layout="wide")
 
@@ -14,7 +13,7 @@ st.set_page_config(page_title="Investment Card Monitor", layout="wide")
 # -------------------------
 
 def format_rupiah(value):
-    if pd.isna(value) or value == 0:
+    if pd.isna(value):
         return "-"
     return f"Rp {value:,.0f}".replace(",", ".")
 
@@ -23,34 +22,45 @@ def format_rupiah(value):
 # -------------------------
 
 def check_password():
+
     if "password_correct" not in st.session_state:
+
         password = st.text_input("Enter password", type="password")
+
         if password == st.secrets["APP_PASSWORD"]:
             st.session_state["password_correct"] = True
             st.rerun()
         else:
             st.stop()
+
     elif not st.session_state["password_correct"]:
         st.stop()
 
 check_password()
 
 # -------------------------
-# SUPABASE & GROQ SETUP
+# SUPABASE CONNECTION
 # -------------------------
 
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
 supabase = create_client(url, key)
+
+# -------------------------
+# GROQ CLIENT
+# -------------------------
+
 groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # -------------------------
-# REFRESH LOGIC
+# REFRESH BUTTON
 # -------------------------
 
 col1, col2 = st.columns([6,1])
+
 with col1:
     st.title("Investment Card Monitor")
+
 with col2:
     if st.button("🔄 Refresh"):
         st.cache_data.clear()
@@ -59,56 +69,7 @@ with col2:
 st.caption(f"Last update: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
 # -------------------------
-# AUDIT & DATA FUNCTIONS
-# -------------------------
-
-@st.cache_data(ttl=3600)
-def get_fundamentals(ticker):
-    try:
-        ti = yf.Ticker(ticker).info
-        return {
-            "Ticker": ticker, 
-            "Sector": ti.get("sector", "Unknown"), 
-            "PE": ti.get("trailingPE"), 
-            "PB": ti.get("priceToBook"), 
-            "ROE": ti.get("returnOnEquity"), 
-            "Yield": ti.get("dividendYield")
-        }
-    except Exception as e:
-        return {"Ticker": ticker, "Sector": "Error Fetching", "Error_Detail": str(e)}
-
-@st.cache_data(ttl=300)
-def get_stock_data(ticker):
-    try:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="2y")
-        if hist.empty:
-            return 0.0, 0.0, 0.0
-        price = hist["Close"].iloc[-1]
-        ma200 = hist["Close"].rolling(200).mean().iloc[-1] if len(hist) >= 200 else price
-        month_change = ((hist["Close"].iloc[-1] - hist["Close"].iloc[-22]) / hist["Close"].iloc[-22] * 100) if len(hist) >= 22 else 0.0
-        return price, ma200, month_change
-    except Exception as e:
-        # Audit Script: Print error to console/log
-        print(f"Audit Error [get_stock_data] for {ticker}: {str(e)}")
-        return 0.0, 0.0, 0.0
-
-def get_peer_performance(peers):
-    perf = []
-    for p in peers:
-        try:
-            hist = yf.Ticker(p).history(period="1mo")
-            if not hist.empty:
-                # Handle potential multi-index from recent yfinance versions
-                close_prices = hist["Close"]
-                change = ((close_prices.iloc[-1] - close_prices.iloc[0]) / close_prices.iloc[0] * 100)
-                perf.append(change)
-        except:
-            continue
-    return sum(perf)/len(perf) if perf else 0
-
-# -------------------------
-# INVESTMENT PLAN & DATA
+# INVESTMENT PLAN
 # -------------------------
 
 portfolio = {
@@ -118,7 +79,12 @@ portfolio = {
     "Buy Max": [3650, 2500, 3900, 4200],
     "Target Capital": [11880000, 3600000, 6080000, 5400000]
 }
+
 df = pd.DataFrame(portfolio)
+
+# -------------------------
+# PEER GROUPS
+# -------------------------
 
 peer_groups = {
     "BBRI.JK": ["BMRI.JK","BBCA.JK"],
@@ -127,202 +93,413 @@ peer_groups = {
     "BSSR.JK": ["ADRO.JK","ITMG.JK"]
 }
 
-# Process Market Signals
-prices, ma200_list, distance_list, ma_signal_list, peer_perf, stock_perf = [], [], [], [], [], []
+# -------------------------
+# MARKET DATA
+# -------------------------
+
+@st.cache_data(ttl=300)
+def get_stock_data(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="1y")
+
+        if hist.empty:
+            return 0.0, 0.0, 0.0
+
+        price = hist["Close"].iloc[-1]
+        
+        if len(hist) >= 200:
+            ma200 = hist["Close"].rolling(200).mean().iloc[-1]
+        else:
+            ma200 = price
+            
+        if len(hist) >= 22:
+            month_change = (hist["Close"].iloc[-1] - hist["Close"].iloc[-22]) / hist["Close"].iloc[-22] * 100
+        else:
+            month_change = 0.0
+
+        return price, ma200, month_change
+    except Exception as e:
+        st.error(f"Error fetching data for {ticker}: {e}")
+        return 0.0, 0.0, 0.0
+
+def get_peer_performance(peers):
+
+    perf = []
+
+    for p in peers:
+        try:
+            hist = yf.Ticker(p).history(period="1mo")
+            if not hist.empty and len(hist) > 0:
+                change = (hist["Close"].iloc[-1] - hist["Close"].iloc[0]) / hist["Close"].iloc[0] * 100
+                perf.append(change)
+        except Exception as e:
+            continue
+
+    if len(perf)==0:
+        return 0
+
+    return sum(perf)/len(perf)
+
+prices=[]
+ma200_list=[]
+distance_list=[]
+ma_signal_list=[]
+peer_perf=[]
+stock_perf=[]
+
 for ticker in df["Ticker"]:
-    p, m, c = get_stock_data(ticker)
-    dist = ((p - m) / m * 100) if m != 0 else 0.0
-    peer_c = get_peer_performance(peer_groups.get(ticker,[]))
-    sig = "OVEREXTENDED" if dist > 15 else "WAIT" if dist > 8 else "WATCH" if dist > 2 else "BUY" if dist > -3 else "STRONG BUY"
-    prices.append(p); ma200_list.append(m); distance_list.append(dist); ma_signal_list.append(sig); peer_perf.append(peer_c); stock_perf.append(c)
 
-df["Current Price"], df["MA200"], df["MA200 Distance %"], df["MA Signal"], df["Peer 1M %"], df["Stock 1M %"] = prices, ma200_list, distance_list, ma_signal_list, peer_perf, stock_perf
+    price, ma200, change = get_stock_data(ticker)
 
-# Logic: Decision & Signal
-def decision(row):
-    if row["Current Price"] <= row["Buy Max"] and row["Current Price"] >= row["Buy Min"]: return "BUY ZONE"
-    return "STRONG BUY" if row["Current Price"] < row["Buy Min"] else "WAIT"
-df["Decision"] = df.apply(decision, axis=1)
+    distance = ((price - ma200) / ma200 * 100) if ma200 != 0 else 0.0
 
-def ai_signal(row):
-    if row["Decision"]=="BUY ZONE" and row["MA Signal"] in ["BUY","STRONG BUY"]: return "BUY"
-    if row["Decision"]=="WAIT" and row["Peer 1M %"]>0: return "WATCH"
-    return "WAIT"
-df["AI Buy Signal"] = df.apply(ai_signal, axis=1)
+    peers = peer_groups.get(ticker,[])
+    peer_change = get_peer_performance(peers)
 
-def interpret(row):
-    m, a = row["Decision"], row["AI Buy Signal"]
-    if m=="BUY ZONE" and a=="BUY": return "Ideal entry. Price inside buy range and momentum healthy."
-    if m=="WAIT" and a=="WATCH": return "Sector momentum positive but price above buy zone."
-    if m=="STRONG BUY" and a=="WAIT": return "Cheap but sector weak. Risk of falling knife."
-    if m=="BUY ZONE" and a=="WAIT": return "Buy zone reached but momentum slightly overextended."
-    return "Neutral condition."
-df["AI Interpretation"] = df.apply(interpret, axis=1)
+    if distance > 15:
+        ma_signal = "OVEREXTENDED"
+    elif distance > 8:
+        ma_signal = "WAIT"
+    elif distance > 2:
+        ma_signal = "WATCH"
+    elif distance > -3:
+        ma_signal = "BUY"
+    else:
+        ma_signal = "STRONG BUY"
 
-# Transactions Logic
-try:
-    res = supabase.table("transactions").select("*").execute()
-    transactions = pd.DataFrame(res.data)
-except: transactions = pd.DataFrame()
+    prices.append(round(price,2))
+    ma200_list.append(round(ma200,2))
+    distance_list.append(round(distance,2))
+    ma_signal_list.append(ma_signal)
+    peer_perf.append(round(peer_change,2))
+    stock_perf.append(round(change,2))
 
-if not transactions.empty:
-    avg_p = transactions.groupby("ticker").apply(lambda x:(x["shares"]*x["price"]).sum()/x["shares"].sum()).reset_index(name="Avg Price")
-    df = df.merge(avg_p, how="left", left_on="Stock", right_on="ticker")
-    summ = transactions.groupby("ticker")["capital_used"].sum().reset_index()
-    df = df.merge(summ, how="left", left_on="Stock", right_on="ticker")
-else:
-    df["Avg Price"], df["capital_used"] = 0, 0
-
-df["capital_used"] = df["capital_used"].fillna(0)
-df["Avg Price"] = df["Avg Price"].fillna(0)
-df["Remaining Capital"] = df["Target Capital"] - df["capital_used"]
-df["Gain/Loss %"] = df.apply(lambda row: ((row["Current Price"] - row["Avg Price"]) / row["Avg Price"] * 100) if row["Avg Price"] != 0 else 0, axis=1).fillna(0)
+df["Current Price"]=prices
+df["MA200"]=ma200_list
+df["MA200 Distance %"]=distance_list
+df["MA Signal"]=ma_signal_list
+df["Peer 1M %"]=peer_perf
+df["Stock 1M %"]=stock_perf
 
 # -------------------------
-# DISPLAY TABLES
+# BUY DECISION
+# -------------------------
+
+def decision(row):
+
+    if row["Current Price"] <= row["Buy Max"] and row["Current Price"] >= row["Buy Min"]:
+        return "BUY ZONE"
+
+    elif row["Current Price"] < row["Buy Min"]:
+        return "STRONG BUY"
+
+    else:
+        return "WAIT"
+
+df["Decision"]=df.apply(decision,axis=1)
+
+# -------------------------
+# AI SIGNAL
+# -------------------------
+
+def ai_signal(row):
+
+    if row["Decision"]=="BUY ZONE" and row["MA Signal"] in ["BUY","STRONG BUY"]:
+        return "BUY"
+
+    if row["Decision"]=="WAIT" and row["Peer 1M %"]>0:
+        return "WATCH"
+
+    if row["MA Signal"]=="OVEREXTENDED":
+        return "WAIT"
+
+    return "WAIT"
+
+df["AI Buy Signal"]=df.apply(ai_signal,axis=1)
+
+# -------------------------
+# AI INTERPRETATION
+# -------------------------
+
+def interpret(row):
+
+    m=row["Decision"]
+    a=row["AI Buy Signal"]
+
+    if m=="BUY ZONE" and a=="BUY":
+        return "Ideal entry. Price inside buy range and momentum healthy."
+
+    if m=="WAIT" and a=="WATCH":
+        return "Sector momentum positive but price above buy zone."
+
+    if m=="STRONG BUY" and a=="WAIT":
+        return "Cheap but sector weak. Risk of falling knife."
+
+    if m=="BUY ZONE" and a=="WAIT":
+        return "Buy zone reached but momentum slightly overextended."
+
+    return "Neutral condition."
+
+df["AI Interpretation"]=df.apply(interpret,axis=1)
+
+# -------------------------
+# LOAD TRANSACTIONS
+# -------------------------
+
+try:
+    response=supabase.table("transactions").select("*").execute()
+    transactions=pd.DataFrame(response.data)
+except:
+    transactions = pd.DataFrame()
+
+if not transactions.empty:
+
+    avg_price = transactions.groupby("ticker").apply(
+        lambda x:(x["shares"]*x["price"]).sum()/x["shares"].sum()
+    )
+
+    avg_price = avg_price.reset_index(name="Avg Price")
+
+    df=df.merge(avg_price,how="left",left_on="Stock",right_on="ticker")
+
+    summary = transactions.groupby("ticker")["capital_used"].sum().reset_index()
+
+    df=df.merge(summary,how="left",left_on="Stock",right_on="ticker")
+
+else:
+
+    df["Avg Price"]=0
+    df["capital_used"]=0
+
+df["capital_used"]=df["capital_used"].fillna(0)
+df["Avg Price"]=df["Avg Price"].fillna(0)
+
+df["Remaining Capital"]=df["Target Capital"]-df["capital_used"]
+
+df["Gain/Loss %"] = df.apply(
+    lambda row: ((row["Current Price"] - row["Avg Price"]) / row["Avg Price"] * 100) if row["Avg Price"] != 0 else 0, 
+    axis=1
+).fillna(0)
+
+# -------------------------
+# MARKET SIGNAL TABLE
 # -------------------------
 
 st.subheader("Market Signals")
-m_disp = df.copy()
-for c in ["Current Price", "Buy Min", "Buy Max", "MA200"]: m_disp[c] = m_disp[c].apply(format_rupiah)
-st.dataframe(m_disp[["Stock","Current Price","Buy Min","Buy Max","MA200","MA200 Distance %","MA Signal","Decision","AI Buy Signal","AI Interpretation"]])
+
+market_df = df.copy()
+
+market_df["Current Price"] = market_df["Current Price"].apply(format_rupiah)
+market_df["Buy Min"] = market_df["Buy Min"].apply(format_rupiah)
+market_df["Buy Max"] = market_df["Buy Max"].apply(format_rupiah)
+market_df["MA200"] = market_df["MA200"].apply(format_rupiah)
+
+st.dataframe(market_df[[
+"Stock",
+"Current Price",
+"Buy Min",
+"Buy Max",
+"MA200",
+"MA200 Distance %",
+"MA Signal",
+"Decision",
+"AI Buy Signal",
+"AI Interpretation"
+]])
+
+# -------------------------
+# PORTFOLIO PERFORMANCE
+# -------------------------
 
 st.subheader("Portfolio Performance")
-p_disp = df.copy()
-for c in ["Avg Price", "Current Price"]: p_disp[c] = p_disp[c].apply(format_rupiah)
-st.dataframe(p_disp[["Stock","Avg Price","Current Price","Gain/Loss %"]])
+
+perf_df = df.copy()
+
+perf_df["Avg Price"] = perf_df["Avg Price"].apply(format_rupiah)
+perf_df["Current Price"] = perf_df["Current Price"].apply(format_rupiah)
+
+st.dataframe(perf_df[[
+"Stock",
+"Avg Price",
+"Current Price",
+"Gain/Loss %"
+]])
+
+# -------------------------
+# PORTFOLIO DEPLOYMENT
+# -------------------------
 
 st.subheader("Portfolio Deployment")
-total_t, total_u = df["Target Capital"].sum(), df["capital_used"].sum()
-st.progress(total_u/total_t if total_t > 0 else 0)
-st.write(f"Capital Used: {format_rupiah(total_u)} | Remaining: {format_rupiah(total_t-total_u)}")
+
+progress_df=df[[
+"Stock",
+"Target Capital",
+"capital_used",
+"Remaining Capital"
+]].copy()
+
+progress_df.columns=["Stock","Target","Invested","Remaining"]
+
+progress_df["Target"]=progress_df["Target"].apply(format_rupiah)
+progress_df["Invested"]=progress_df["Invested"].apply(format_rupiah)
+progress_df["Remaining"]=progress_df["Remaining"].apply(format_rupiah)
+
+st.dataframe(progress_df)
+
+total_target=df["Target Capital"].sum()
+total_used=df["capital_used"].sum()
+
+progress=total_used/total_target if total_target>0 else 0
+
+st.progress(progress)
+
+st.write(f"Capital Used: {format_rupiah(total_used)}")
+st.write(f"Remaining Capital: {format_rupiah(total_target-total_used)}")
 
 # -------------------------
-# 🔮 MONTE CARLO ENGINE (Core Function)
+# PRICE SIMULATION (THE "MIROFISH" BLOCK)
 # -------------------------
-
-def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
-    try:
-        # Audit: Track fetching start
-        h = yf.download(ticker_symbol, period="1y", progress=False, multi_level_index=False)["Close"]
-        
-        if h.empty or len(h) < 30:
-            return None
-        
-        rets = h.pct_change().dropna()
-        v = rets.std()
-        d = rets.mean() - (0.5 * v**2)
-        s_price = start_price if start_price else h.iloc[-1]
-        
-        growth = np.exp(d + v * np.random.normal(0, 1, (int(days), sims)))
-        paths = np.zeros_like(growth)
-        paths[0] = s_price
-        for t in range(1, int(days)):
-            paths[t] = paths[t-1] * growth[t]
-            
-        return {
-            "p90": np.percentile(paths[-1], 10), 
-            "p50": np.percentile(paths[-1], 50), 
-            "p10": np.percentile(paths[-1], 90), 
-            "paths": paths
-        }
-    except Exception as e:
-        # Audit Script: Detailed error reporting for Monte Carlo
-        st.error(f"Audit Detail for {ticker_symbol}: {str(e)}")
-        print(traceback.format_exc())
-        return None
-
-# Section 1: Manual Simulation (Visible playground)
 st.divider()
-st.subheader("🔮 Probability & Scenario Engine")
+st.subheader("🔮 Price Probability Simulation")
+st.write("Simulate 5,000 potential future paths to predict the probability of a price event.")
+
 sim_col1, sim_col2, sim_col3 = st.columns(3)
-with sim_col1: sim_s = st.selectbox("Stock for Analysis", df["Stock"])
-with sim_col2: sim_d = st.number_input("Days ahead", min_value=1, value=30)
-with sim_col3: 
-    row_match = df[df["Stock"] == sim_s]
-    curr_v = float(row_match["Current Price"].iloc[0]) if not row_match.empty else 0.0
-    trig_v = st.number_input("What if price hits this tomorrow?", value=curr_v)
+with sim_col1:
+    sim_stock = st.selectbox("Stock for Simulation", df["Stock"])
+with sim_col2:
+    sim_days = st.number_input("Days ahead", min_value=1, value=30)
+with sim_col3:
+    current_val = float(df[df["Stock"] == sim_stock]["Current Price"].iloc[0])
+    sim_target = st.number_input("Target Price Level", value=current_val * 1.05)
 
-if st.button("🚀 Run Probabilistic Discovery"):
-    t_sym = df.loc[df["Stock"] == sim_s, "Ticker"].iloc[0]
-    with st.spinner(f"Auditing Data & Running Simulation for {sim_s}..."):
-        res_base = run_monte_carlo(t_sym, sim_d)
-        res_shift = run_monte_carlo(t_sym, sim_d, start_price=trig_v)
+if st.button("🚀 Run Simulation Swarm"):
+    try:
+        t_symbol = df.loc[df["Stock"] == sim_stock, "Ticker"].iloc[0]
+        h_data = yf.Ticker(t_symbol).history(period="1y")["Close"]
         
-        if res_base:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Most Possible (50%)", format_rupiah(res_base["p50"]))
-            c2.metric("Conservative (90%)", format_rupiah(res_base["p90"]))
-            c3.metric("Optimistic (10%)", format_rupiah(res_base["p10"]))
-            st.info(f"**Scenario Logic:** Jika harga besok menyentuh {format_rupiah(trig_v)}, maka target 'Most Possible' 30 hari bergeser ke **{format_rupiah(res_shift['p50'])}**.")
-            st.line_chart(pd.DataFrame(res_base["paths"][:, :50]))
+        if len(h_data) > 30:
+            returns = h_data.pct_change().dropna()
+            vol = returns.std()
+            drift = returns.mean() - (0.5 * vol**2)
+            
+            # Monte Carlo Logic
+            num_sims = 5000
+            daily_growth = np.exp(drift + vol * np.random.normal(0, 1, (int(sim_days), num_sims)))
+            paths = np.zeros_like(daily_growth)
+            paths[0] = h_data.iloc[-1]
+            for t in range(1, int(sim_days)):
+                paths[t] = paths[t-1] * daily_growth[t]
+            
+            # Calc Probability
+            if sim_target > h_data.iloc[-1]:
+                hits = np.sum(np.amax(paths, axis=0) >= sim_target)
+            else:
+                hits = np.sum(np.amin(paths, axis=0) <= sim_target)
+            
+            prob = (hits / num_sims) * 100
+            st.metric(f"Probability to hit {format_rupiah(sim_target)}", f"{prob:.1f}%")
+            st.line_chart(pd.DataFrame(paths[:, :50])) # Show 50 sample paths
+        else:
+            st.warning("Insufficient history for simulation.")
+    except Exception as e:
+        st.error(f"Simulation Error: {e}")
 
 # -------------------------
-# FUNDAMENTALS & EXECUTE
+# EXECUTE BUY
 # -------------------------
-
-st.subheader("Fundamental Snapshot")
-f_df = pd.DataFrame([get_fundamentals(t) for t in portfolio["Ticker"]])
-st.dataframe(f_df)
 
 st.subheader("Execute Buy")
-t_choice = st.selectbox("Stock", df["Stock"], key="b_t")
-shs = st.number_input("Shares", min_value=1, step=1)
-prc = st.number_input("Price", min_value=1.0)
-if st.button("Record Trade"):
-    supabase.table("transactions").insert({"ticker":t_choice, "shares":shs, "price":prc, "capital_used":shs*prc}).execute()
-    st.success("Trade Recorded")
+
+ticker_choice=st.selectbox("Stock",df["Stock"], key="exec_buy_stock")
+
+shares=st.number_input("Shares",min_value=1,step=1)
+
+price=st.number_input("Execution Price",min_value=1.0,step=1.0)
+
+if st.button("Record Buy"):
+    try:
+        capital=shares*price
+        supabase.table("transactions").insert({
+            "ticker":ticker_choice,
+            "shares":shares,
+            "price":price,
+            "capital_used":capital
+        }).execute()
+        st.success("Trade recorded")
+    except Exception as e:
+        st.error(f"Record error: {e}")
 
 # -------------------------
-# AI REPORT (PORTFOLIO-WIDE STRATEGIC BRIEF)
+# TRANSACTION HISTORY
 # -------------------------
+
+st.subheader("Transaction History")
+
+if not transactions.empty:
+    trans_df = transactions.copy()
+    trans_df["capital_used"] = trans_df["capital_used"].apply(format_rupiah)
+    st.dataframe(trans_df[["ticker","shares","price","capital_used","created_at"]])
+else:
+    st.write("No trades recorded yet.")
+
+# -------------------------
+# FUNDAMENTALS
+# -------------------------
+
+@st.cache_data(ttl=3600)
+def get_fundamentals(ticker):
+    try:
+        stock=yf.Ticker(ticker)
+        info=stock.info
+        return {
+            "Ticker":ticker,
+            "Sector": info.get("sector", "Unknown"),
+            "Price":info.get("currentPrice"),
+            "PE":info.get("trailingPE"),
+            "PB":info.get("priceToBook"),
+            "Dividend Yield":info.get("dividendYield"),
+            "ROE":info.get("returnOnEquity"),
+            "Beta":info.get("beta")
+        }
+    except:
+        return {"Ticker":ticker, "Sector": "Unknown", "Price":None, "PE":None, "PB":None, "Dividend Yield":None, "ROE":None, "Beta":None}
+
+fundamentals=[get_fundamentals(t) for t in portfolio["Ticker"]]
+fundamental_df=pd.DataFrame(fundamentals)
+
+st.subheader("Fundamental Snapshot")
+st.dataframe(fundamental_df)
+
+# -------------------------
+# AI REPORT
+# -------------------------
+
+def generate_ai_report():
+    # Feeding sector into prompt to avoid mislabeling
+    prompt=f"""
+Kamu adalah analis saham Indonesia. Analisis portofolio ini:
+
+DATA FUNDAMENTAL (SECTOR-SPECIFIC):
+{fundamental_df.to_string(index=False)}
+
+DATA MARKET SIGNALS:
+{df.to_string(index=False)}
+
+Analisis setiap saham berdasarkan sektor aslinya. Outlook 1 bulan dan Risiko.
+"""
+    try:
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.3
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        return f"AI Error: {e}"
 
 st.subheader("AI Portfolio Analyst")
+
 if st.button("Generate AI Analysis"):
-    with st.spinner("Executing background swarm and generating 4-point analysis..."):
-        prob_summary = ""
-        for _, row in df.iterrows():
-            mc = run_monte_carlo(row["Ticker"], days=30, sims=1000)
-            mc_shift = run_monte_carlo(row["Ticker"], days=30, sims=1000, start_price=row["Buy Max"])
-            
-            if mc and mc_shift:
-                prob_summary += f"""
-                SAHAM: {row['Stock']}
-                - Harga Sekarang: {format_rupiah(row['Current Price'])}
-                - Avg Price User: {format_rupiah(row['Avg Price'])}
-                - Target Beli (Buy Max): {format_rupiah(row['Buy Max'])}
-                - Range (90%-10%): {format_rupiah(mc['p90'])} - {format_rupiah(mc['p10'])}
-                - Most Possible: {format_rupiah(mc['p50'])}
-                - Shift Logic (Jika kena Buy Max): {format_rupiah(mc_shift['p50'])}
-                ---
-                """
-
-        prompt = f"""
-        Tugas: Senior Quant Analyst. Berikan evaluasi strategis untuk BBRI, PTBA, TLKM, BSSR secara berurutan.
-        
-        DATA SIMULASI:
-        {prob_summary}
-
-        DATA MARKET & FUNDAMENTAL:
-        {f_df.to_string()}
-        {df.to_string()}
-        
-        WAJIB ANALISIS SETIAP SAHAM DENGAN FORMAT 4 POIN:
-        1. Rentang Harga & Probabilitas: Sajikan rentang harga (Bottom 90% ke Top 10%). Tegaskan harga mana yang 'Most Possible'.
-        2. Skenario Pergeseran (Shift): Jelaskan bagaimana rentang harga berubah jika harga menyentuh 'Buy Max' user menggunakan data 'Shift Logic'.
-        3. Prospek 1 Bulan: Berikan insight prospek 1 bulan kedepan berdasarkan teknikal (MA200) dan sentimen pasar.
-        4. Posisi Investasi: Analisis apakah posisi saat ini (berdasarkan Avg Price) termasuk Risky, Noise, atau Performing Well. Berikan alasan lugas.
-        
-        Note: BSSR adalah Coal Mining. Dilarang menebak rumus. Gunakan data simulasi yang diberikan.
-        """
-        
-        try:
-            res = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile", 
-                messages=[{"role": "system", "content": "Anda adalah analis investasi data-driven yang hanya berbicara berdasarkan data statistik yang disediakan."},
-                          {"role": "user", "content": prompt}], 
-                temperature=0.1
-            )
-            st.markdown(res.choices[0].message.content)
-        except Exception as e:
-            st.error(f"AI Error: {e}")
+    with st.spinner("Analyzing..."):
+        st.markdown(generate_ai_report())
