@@ -98,20 +98,18 @@ def get_peer_performance(peers):
         except: continue
     return sum(perf)/len(perf) if perf else 0
 
-# Process Market Data
+# Market Signal Processing
 prices, ma200_list, distance_list, ma_signal_list, peer_perf, stock_perf = [], [], [], [], [], []
 for ticker in df["Ticker"]:
     p, m, c = get_stock_data(ticker)
     dist = ((p - m) / m * 100) if m != 0 else 0.0
     peer_c = get_peer_performance(peer_groups.get(ticker,[]))
-    
     sig = "OVEREXTENDED" if dist > 15 else "WAIT" if dist > 8 else "WATCH" if dist > 2 else "BUY" if dist > -3 else "STRONG BUY"
-    prices.append(round(p,2)); ma200_list.append(round(m,2)); distance_list.append(round(dist,2))
-    ma_signal_list.append(sig); peer_perf.append(round(peer_c,2)); stock_perf.append(round(c,2))
+    prices.append(p); ma200_list.append(m); distance_list.append(dist); ma_signal_list.append(sig); peer_perf.append(peer_c); stock_perf.append(c)
 
 df["Current Price"], df["MA200"], df["MA200 Distance %"], df["MA Signal"], df["Peer 1M %"], df["Stock 1M %"] = prices, ma200_list, distance_list, ma_signal_list, peer_perf, stock_perf
 
-# Logic Functions (Decision, AI Signal, Interpret)
+# Logic: Decision & Signal
 def decision(row):
     if row["Current Price"] <= row["Buy Max"] and row["Current Price"] >= row["Buy Min"]: return "BUY ZONE"
     return "STRONG BUY" if row["Current Price"] < row["Buy Min"] else "WAIT"
@@ -132,7 +130,7 @@ def interpret(row):
     return "Neutral condition."
 df["AI Interpretation"] = df.apply(interpret, axis=1)
 
-# Transactions
+# Transactions Logic
 try:
     res = supabase.table("transactions").select("*").execute()
     transactions = pd.DataFrame(res.data)
@@ -171,7 +169,7 @@ st.progress(total_u/total_t if total_t > 0 else 0)
 st.write(f"Capital Used: {format_rupiah(total_u)} | Remaining: {format_rupiah(total_t-total_u)}")
 
 # -------------------------
-# 🔮 THE "MIROFISH" PROBABILITY ENGINE (v1.2)
+# 🔮 MONTE CARLO ENGINE (v1.3)
 # -------------------------
 
 def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
@@ -190,9 +188,11 @@ def run_monte_carlo(ticker_symbol, days=30, sims=2000, start_price=None):
 
 st.divider()
 st.subheader("🔮 Probability & Scenario Engine")
+st.write("Manual Interactive Simulation. Use this to stress-test specific price targets.")
+
 sim_col1, sim_col2, sim_col3 = st.columns(3)
 with sim_col1: sim_s = st.selectbox("Stock for Analysis", df["Stock"])
-with sim_col2: sim_d = st.number_input("Days ahead", min_value=1, value=30)
+with sim_col2: sim_d = st.number_input("Simulation Horizon (Days)", min_value=1, value=30)
 with sim_col3: 
     curr_v = float(df[df["Stock"] == sim_s]["Current Price"].iloc[0])
     trig_v = st.number_input("What if price hits this tomorrow?", value=curr_v)
@@ -205,9 +205,12 @@ if st.button("🚀 Run Probabilistic Discovery"):
     if res_base:
         c1, c2, c3 = st.columns(3)
         c1.metric("Most Possible (50%)", format_rupiah(res_base["p50"]))
-        c2.metric("Conservative (90%)", format_rupiah(res_base["p90"]))
+        c2.metric("Conservative (90%)", format_rupiah(res_base["p90"]), help="90% chance price stays above this")
         c3.metric("Optimistic (10%)", format_rupiah(res_base["p10"]))
-        st.info(f"**Scenario:** If price hits {format_rupiah(trig_v)}, the target shifts to **{format_rupiah(res_shift['p50'])}**.")
+        
+        st.info(f"**Scenario Logic:** If the price hits **{format_rupiah(trig_v)}** tomorrow, the 'Most Possible' level shifts to **{format_rupiah(res_shift['p50'])}**.")
+        
+        # Display the visual swarm chart
         st.line_chart(pd.DataFrame(res_base["paths"][:, :50]))
 
 # -------------------------
@@ -217,10 +220,10 @@ if st.button("🚀 Run Probabilistic Discovery"):
 st.subheader("Execute Buy")
 t_choice = st.selectbox("Stock", df["Stock"], key="b_t")
 shs = st.number_input("Shares", min_value=1, step=1)
-prc = st.number_input("Price", min_value=1.0)
+prc = st.number_input("Execution Price", min_value=1.0)
 if st.button("Record Trade"):
     supabase.table("transactions").insert({"ticker":t_choice, "shares":shs, "price":prc, "capital_used":shs*prc}).execute()
-    st.success("Recorded")
+    st.success("Trade recorded.")
 
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
@@ -234,23 +237,25 @@ st.subheader("Fundamental Snapshot")
 st.dataframe(f_df)
 
 # -------------------------
-# AI REPORT (Now with Probability Data!)
+# AI REPORT (INTEGRATED SWARM)
 # -------------------------
 
 st.subheader("AI Portfolio Analyst")
+st.write("The AI will automatically run 1,000 background simulations for each stock before analyzing.")
+
 if st.button("Generate AI Analysis"):
-    with st.spinner("Running background simulations for all stocks..."):
-        # Run a quick simulation for every stock to feed the AI
+    with st.spinner("Executing MiroFish background swarm..."):
         prob_summary = ""
         for _, row in df.iterrows():
+            # Background check for each stock
             mc = run_monte_carlo(row["Ticker"], days=30, sims=1000)
             if mc:
-                prob_summary += f"- {row['Stock']}: Current {format_rupiah(row['Current Price'])}, Most Likely {format_rupiah(mc['p50'])}, Bottom Range (90% prob) {format_rupiah(mc['p90'])}\n"
+                prob_summary += f"- {row['Stock']}: Current {format_rupiah(row['Current Price'])}, Probable Range {format_rupiah(mc['p90'])} - {format_rupiah(mc['p10'])}, Most Likely {format_rupiah(mc['p50'])}\n"
 
         prompt = f"""
-        Analyst Task: Evaluate this portfolio with 'MiroFish' probabilistic logic.
+        Kamu adalah Analis Saham Indonesia dengan logika 'MiroFish' (Probabilistic Analysis).
         
-        PROBABILISTIC OUTLOOK (30 Days):
+        DATA SWARM (Probabilitas 30 Hari):
         {prob_summary}
 
         FUNDAMENTALS:
@@ -259,9 +264,11 @@ if st.button("Generate AI Analysis"):
         MARKET SIGNALS:
         {df.to_string()}
         
-        Specific Rule: BSSR is COAL MINING (Energy).
-        Analyze if the user's Buy Max (in Market Signals) is realistic compared to the 'Bottom Range' (90% prob). 
-        If the Buy Max is much lower than the Bottom Range, warn the user they might never get their entry.
+        TUGAS KHUSUS:
+        1. BSSR adalah COAL MINING (Energy).
+        2. Bandingkan 'Buy Max' user dengan 'Probable Range' dari Monte Carlo.
+        3. Jika 'Buy Max' user berada di bawah 'Bottom Range (90% prob)', beri tahu user bahwa target harganya terlalu rendah dan mungkin tidak akan tercapai (order tidak akan fill).
+        4. Berikan saran 'Realistic Entry' berdasarkan angka Most Likely.
         """
         res = groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role":"user","content":prompt}], temperature=0.3)
         st.markdown(res.choices[0].message.content)
